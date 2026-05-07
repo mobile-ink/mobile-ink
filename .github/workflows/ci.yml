@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-ink-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Package, native smoke, and example
+    runs-on: macos-15
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            example/package-lock.json
+
+      - name: Install package dependencies
+        run: npm ci
+
+      - name: Typecheck package
+        run: npm run typecheck
+
+      - name: Run Jest tests
+        run: npm test
+
+      - name: Run native serialization smoke test
+        run: npm run test:native:smoke
+
+      - name: Build package artifacts
+        run: npm run build
+
+      - name: Check npm package contents
+        run: npm pack --dry-run --ignore-scripts
+
+      - name: Install example dependencies
+        run: npm ci --prefix example
+
+      - name: Typecheck example
+        run: npm run test:example:typecheck
+
+      - name: Export example iOS bundle
+        run: npm run test:example:export:ios

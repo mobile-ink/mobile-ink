@@ -1,0 +1,60 @@
+name: Bug report
+description: Report a reproducible Mobile Ink bug
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please use the standalone example app when possible.
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Area
+      options:
+        - NativeInkCanvas
+        - InfiniteInkCanvas
+        - ContinuousEnginePool
+        - ZoomableInkViewport
+        - iOS native bridge
+        - C++ engine
+        - Packaging/install
+        - Example app
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Open the example app
+        2. Select Pen
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: iPad model, iOS version, React Native version, Expo/dev-client version, Xcode version
+    validations:
+      required: true

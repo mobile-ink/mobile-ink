@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "Mobile Ink Example",
+    "slug": "mobile-ink-example",
+    "version": "0.1.0",
+    "orientation": "default",
+    "newArchEnabled": true,
+    "ios": {
+      "bundleIdentifier": "io.mathnotes.mobileink.example",
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "io.mathnotes.mobileink.example"
+    },
+    "plugins": ["expo-dev-client"]
+  }
+}

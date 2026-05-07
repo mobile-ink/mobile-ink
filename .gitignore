@@ -1,0 +1,12 @@
+node_modules
+dist/
+build/
+coverage/
+example/node_modules/
+example/.expo/
+example/ios/
+example/android/
+.DS_Store
+*.log
+lib/
+*.tgz

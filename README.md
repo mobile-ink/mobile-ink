@@ -23,6 +23,8 @@ MathNotes has been building this engine since May 2025. We are open-sourcing the
 
 The goal is simple: make this the best community drawing engine for React Native and native mobile note-taking surfaces.
 
+mobile-ink is currently used in production in MathNotes: https://apps.apple.com/us/app/mathnotes-ai-notes-for-stem/id6751956086
+
 ## Demos
 
 | Drawing and tools | Selection | Large notebook interaction |

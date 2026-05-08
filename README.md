@@ -36,13 +36,6 @@ Full clips:
 [selection editing](https://raw.githubusercontent.com/mathnotes-app/mobile-ink/main/docs/assets/selection-editing-demo.mp4),
 [large notebook performance](https://raw.githubusercontent.com/mathnotes-app/mobile-ink/main/docs/assets/large-notebook-performance.mp4).
 
-## Status
-
-- Package: extracted and dogfooded by MathNotes.
-- Version: `0.x`; public API may change before `1.0`.
-- Platform: iOS + React Native first.
-- Example: Expo dev-client app, not Expo Go.
-- Android: not part of the first public release.
 
 ## Install
 

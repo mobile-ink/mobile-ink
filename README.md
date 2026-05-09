@@ -128,8 +128,6 @@ npx expo run:ios
 
 - [Architecture](docs/architecture.md)
 - [API Reference](docs/api.md)
-- [Publishing Checklist](docs/publishing.md)
-- [Media Capture Guide](docs/media.md)
 
 ## Development
 

@@ -15,6 +15,12 @@ Production-grade React Native ink primitives extracted from the MathNotes canvas
 
 `@mathnotes/mobile-ink` is an iOS-first native drawing engine for React Native apps. It gives you Apple Pencil input, Skia/Metal rendering, stroke serialization, selection, zoom, momentum scrolling, and a continuous notebook surface backed by a fixed native engine pool.
 
+## A Note To Contributors
+
+Mobile Ink is young, but the goal is serious: make high-quality mobile ink available to every React Native team that needs it. If you try the package, report a bug, improve docs, test it on a real device, suggest an API shape, or think through a native rendering problem with us, thank you. Notes-app canvases are full of sharp edges, and thoughtful feedback from people building real apps is one of the most valuable contributions this project can get.
+
+Beginner questions are welcome here. So are tiny fixes. A clear reproduction, a missing setup note, a confusing API name, or a small example improvement all help move the engine toward something the community can trust.
+
 ## Why This Exists
 
 There is still no strong open-source answer for the kind of drawing surface a serious mobile notes app needs. A single canvas is not enough. A notes app has to handle long notebooks, fast page crossing, Pencil latency, zoom, selection, shape editing, serialization, previewing, and native memory pressure without making the JS thread fall over.

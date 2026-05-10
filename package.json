@@ -22,6 +22,7 @@
     "ios",
     "cpp",
     "docs/*.md",
+    "CHANGELOG.md",
     "MathNotesMobileInk.podspec",
     "react-native.config.js",
     "README.md",
@@ -83,6 +84,8 @@
     "skia",
     "metal",
     "apple-pencil",
+    "handwriting",
+    "notes",
     "infinite-canvas",
     "notebook"
   ],

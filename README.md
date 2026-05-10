@@ -5,6 +5,7 @@ Production-grade React Native ink primitives extracted from the MathNotes canvas
 <p>
   <a href="https://www.npmjs.com/package/@mathnotes/mobile-ink"><img src="https://img.shields.io/npm/v/@mathnotes/mobile-ink.svg" alt="npm version" /></a>
   <a href="https://www.npmjs.com/package/@mathnotes/mobile-ink"><img src="https://img.shields.io/npm/dm/@mathnotes/mobile-ink.svg" alt="npm downloads" /></a>
+  <a href="https://github.com/mathnotes-app/mobile-ink/actions/workflows/ci.yml"><img src="https://github.com/mathnotes-app/mobile-ink/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
   <a href="https://github.com/mathnotes-app/mobile-ink/releases/tag/v0.1.0"><img src="https://img.shields.io/github/v/release/mathnotes-app/mobile-ink" alt="GitHub release" /></a>
   <a href="https://github.com/mathnotes-app/mobile-ink/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@mathnotes/mobile-ink.svg" alt="license" /></a>
 </p>
@@ -30,6 +31,19 @@ MathNotes has been building this engine since May 2025. We are open-sourcing the
 The goal is simple: make this the best community drawing engine for React Native and native mobile note-taking surfaces.
 
 mobile-ink is currently used in production in MathNotes: https://apps.apple.com/us/app/mathnotes-ai-notes-for-stem/id6751956086
+
+## Capability Snapshot
+
+| Area | Current support |
+| --- | --- |
+| iOS Apple Pencil drawing | Used in production |
+| Native rendering | Custom `MTKView` backed by C++ Skia/Metal |
+| Continuous notebooks | Fixed native engine pool with momentum scroll and pinch zoom |
+| Tools | Pen, highlighter, crayon, calligraphy, eraser, selection, and shape recognition |
+| Serialization | JSON notebook payloads plus native page load/save/export helpers |
+| Example app | Expo dev-client app with blank continuous notebook, tools, selection, save/reload, and zoom |
+| Android | Not supported yet |
+| Expo Go | Not supported because this package includes native code |
 
 ## Demos
 
@@ -134,6 +148,18 @@ npx expo run:ios
 
 - [Architecture](docs/architecture.md)
 - [API Reference](docs/api.md)
+- [Changelog](CHANGELOG.md)
+
+## Roadmap
+
+Near-term work is focused on making the public package easier to adopt and easier to contribute to:
+
+- Improve install and troubleshooting docs for React Native and Expo dev-client apps.
+- Add more integration recipes for save/load, tool switching, and app-owned storage.
+- Tighten selection transform performance for large stroke groups.
+- Improve edge-case zoom behavior near page and canvas boundaries.
+- Continue hardening the example app as a small regression harness.
+- Explore Android after the iOS API surface has settled.
 
 ## Development
 

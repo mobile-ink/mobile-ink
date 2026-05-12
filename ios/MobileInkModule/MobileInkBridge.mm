@@ -9,6 +9,23 @@
 // Note: SkImages namespace functions are in SkImage.h
 #include <include/core/SkImage.h>
 #include <include/core/SkData.h>
+#include <include/core/SkColorSpace.h>
+#include <include/core/SkColorFilter.h>
+#include <include/core/SkPaint.h>
+#include <include/effects/SkColorMatrix.h>
+#import <Metal/Metal.h>
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdocumentation"
+#include <include/gpu/ganesh/GrBackendSurface.h>
+#include <include/gpu/ganesh/GrDirectContext.h>
+#include <include/gpu/ganesh/SkSurfaceGanesh.h>
+#include <include/gpu/ganesh/mtl/GrMtlBackendContext.h>
+#include <include/gpu/ganesh/mtl/GrMtlBackendSurface.h>
+#include <include/gpu/ganesh/mtl/GrMtlDirectContext.h>
+#include <include/gpu/ganesh/mtl/GrMtlTypes.h>
+#pragma clang diagnostic pop
+
 #include <algorithm>
 #include <cmath>
 #include <unordered_map>
@@ -64,6 +81,21 @@ bool deserializeDrawingBytes(
 
     const std::vector<uint8_t> buffer(data, data + size);
     return serializer.deserialize(buffer, strokes);
+}
+
+void renderWithCpuColorOrdering(nativedrawing::SkiaDrawingEngine* engine, SkCanvas* canvas) {
+    float redBlueSwapMatrix[20] = {
+        0, 0, 1, 0, 0,
+        0, 1, 0, 0, 0,
+        1, 0, 0, 0, 0,
+        0, 0, 0, 1, 0
+    };
+
+    SkPaint outputPaint;
+    outputPaint.setColorFilter(SkColorFilters::Matrix(redBlueSwapMatrix));
+    canvas->saveLayer(nullptr, &outputPaint);
+    engine->render(canvas);
+    canvas->restore();
 }
 
 void translateStrokeInPlace(
@@ -319,6 +351,78 @@ void renderToCanvas(void* engine, void* canvas) {
     if (engine && canvas) {
         static_cast<SkiaDrawingEngine*>(engine)->render(static_cast<SkCanvas*>(canvas));
     }
+}
+
+void* createGaneshMetalContext(void* devicePtr, void* commandQueuePtr) {
+    if (!devicePtr || !commandQueuePtr) {
+        return nullptr;
+    }
+
+    id<MTLDevice> device = (__bridge id<MTLDevice>)devicePtr;
+    id<MTLCommandQueue> commandQueue = (__bridge id<MTLCommandQueue>)commandQueuePtr;
+
+    GrMtlBackendContext backendContext = {};
+    backendContext.fDevice.reset((__bridge void*)device);
+    backendContext.fQueue.reset((__bridge void*)commandQueue);
+
+    sk_sp<GrDirectContext> context = GrDirectContexts::MakeMetal(backendContext);
+    if (!context) {
+        NSLog(@"[MobileInk][Ganesh] Failed to create GrDirectContext for Metal");
+        return nullptr;
+    }
+
+    return new sk_sp<GrDirectContext>(std::move(context));
+}
+
+void destroyGaneshMetalContext(void* contextPtr) {
+    if (!contextPtr) {
+        return;
+    }
+
+    auto* contextHandle = static_cast<sk_sp<GrDirectContext>*>(contextPtr);
+    if (contextHandle->get()) {
+        (*contextHandle)->flushAndSubmit();
+    }
+    delete contextHandle;
+}
+
+bool renderToGaneshMetalTexture(void* engine, void* contextPtr, void* texturePtr, int width, int height) {
+    if (!engine || !contextPtr || !texturePtr || width <= 0 || height <= 0) {
+        return false;
+    }
+
+    auto* contextHandle = static_cast<sk_sp<GrDirectContext>*>(contextPtr);
+    GrDirectContext* directContext = contextHandle->get();
+    if (!directContext) {
+        return false;
+    }
+
+    id<MTLTexture> texture = (__bridge id<MTLTexture>)texturePtr;
+    GrMtlTextureInfo textureInfo;
+    textureInfo.fTexture.retain((__bridge void*)texture);
+
+    GrBackendRenderTarget backendRenderTarget =
+        GrBackendRenderTargets::MakeMtl(width, height, textureInfo);
+
+    sk_sp<SkSurface> surface = SkSurfaces::WrapBackendRenderTarget(
+        directContext,
+        backendRenderTarget,
+        kTopLeft_GrSurfaceOrigin,
+        kBGRA_8888_SkColorType,
+        nullptr,
+        nullptr
+    );
+
+    if (!surface) {
+        NSLog(@"[MobileInk][Ganesh] Failed to wrap MTKView drawable texture");
+        return false;
+    }
+
+    SkCanvas* canvas = surface->getCanvas();
+    canvas->clear(SK_ColorTRANSPARENT);
+    renderWithCpuColorOrdering(static_cast<SkiaDrawingEngine*>(engine), canvas);
+    directContext->flushAndSubmit(surface.get());
+    return true;
 }
 
 void* createSkiaCanvas(void* pixels, int width, int height, int rowBytes) {

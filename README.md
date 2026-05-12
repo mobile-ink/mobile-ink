@@ -6,7 +6,7 @@ Production-grade React Native ink primitives extracted from the MathNotes canvas
   <a href="https://www.npmjs.com/package/@mathnotes/mobile-ink"><img src="https://img.shields.io/npm/v/@mathnotes/mobile-ink.svg" alt="npm version" /></a>
   <a href="https://www.npmjs.com/package/@mathnotes/mobile-ink"><img src="https://img.shields.io/npm/dm/@mathnotes/mobile-ink.svg" alt="npm downloads" /></a>
   <a href="https://github.com/mathnotes-app/mobile-ink/actions/workflows/ci.yml"><img src="https://github.com/mathnotes-app/mobile-ink/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
-  <a href="https://github.com/mathnotes-app/mobile-ink/releases/tag/v0.1.0"><img src="https://img.shields.io/github/v/release/mathnotes-app/mobile-ink" alt="GitHub release" /></a>
+  <a href="https://github.com/mobile-ink/mobile-ink/releases/tag/v0.2.0"><img src="https://img.shields.io/github/v/release/mobile-ink/mobile-ink" alt="GitHub release" /></a>
   <a href="https://github.com/mathnotes-app/mobile-ink/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@mathnotes/mobile-ink.svg" alt="license" /></a>
 </p>
 

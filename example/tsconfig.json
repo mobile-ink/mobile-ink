@@ -1,6 +1,11 @@
 {
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@mathnotes/mobile-ink": ["../src/index.ts"],
+      "@mathnotes/mobile-ink/*": ["../src/*"]
+    },
     "strict": true
   }
 }

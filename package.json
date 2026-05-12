@@ -18,6 +18,7 @@
     "src/index.ts",
     "src/payload.ts",
     "src/types.ts",
+    "src/benchmark",
     "src/utils",
     "ios",
     "cpp",

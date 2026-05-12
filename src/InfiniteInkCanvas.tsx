@@ -23,6 +23,16 @@ import type {
   ContinuousEnginePoolToolState,
 } from "./ContinuousEnginePool";
 import NativeInkPageBackground from "./NativeInkPageBackground";
+import type {
+  NativeInkBenchmarkOptions,
+  NativeInkBenchmarkRecordingOptions,
+  NativeInkBenchmarkResult,
+  NativeInkRenderBackend,
+} from "./benchmark";
+import {
+  aggregateNotebookBenchmarkResults,
+  DEFAULT_NATIVE_INK_RENDER_BACKEND,
+} from "./benchmark";
 import ZoomableInkViewport from "./ZoomableInkViewport";
 import type { ZoomableInkViewportRef } from "./ZoomableInkViewport";
 import type {
@@ -61,6 +71,9 @@ export type InfiniteInkCanvasRef = {
   resetViewport: (animated?: boolean) => void;
   getCurrentPageIndex: () => number;
   scrollToPage: (pageIndex: number, animated?: boolean) => void;
+  runBenchmark?: (options?: NativeInkBenchmarkOptions) => Promise<NativeInkBenchmarkResult>;
+  startBenchmarkRecording?: (options?: NativeInkBenchmarkRecordingOptions) => Promise<boolean>;
+  stopBenchmarkRecording?: () => Promise<NativeInkBenchmarkResult>;
 };
 
 export type InfiniteInkCanvasProps = {
@@ -70,6 +83,7 @@ export type InfiniteInkCanvasProps = {
   pageWidth?: number;
   pageHeight?: number;
   backgroundType?: string;
+  renderBackend?: NativeInkRenderBackend;
   pdfBackgroundBaseUri?: string;
   fingerDrawingEnabled?: boolean;
   toolState: ContinuousEnginePoolToolState;
@@ -154,6 +168,7 @@ function InfiniteInkCanvasImpl(
     pageWidth = DEFAULT_PAGE_WIDTH,
     pageHeight = DEFAULT_PAGE_HEIGHT,
     backgroundType = "plain",
+    renderBackend = DEFAULT_NATIVE_INK_RENDER_BACKEND,
     pdfBackgroundBaseUri,
     fingerDrawingEnabled = false,
     toolState,
@@ -185,6 +200,7 @@ function InfiniteInkCanvasImpl(
   const dirtyPageIdsRef = useRef(new Set<string>());
   const lastEditedPageIdRef = useRef<string | null>(null);
   const nativeReadyRef = useRef(false);
+  const benchmarkRecordingOptionsRef = useRef<NativeInkBenchmarkRecordingOptions | null>(null);
 
   const contentHeight = pages.length * pageHeight;
 
@@ -350,6 +366,11 @@ function InfiniteInkCanvasImpl(
     return activePage ? perPageSlotRefs.current.get(activePage.id) : undefined;
   }, []);
 
+  const getCurrentPageSlot = useCallback(() => {
+    const activePage = pagesRef.current[currentPageIndexRef.current];
+    return activePage ? perPageSlotRefs.current.get(activePage.id) : undefined;
+  }, []);
+
   const captureDirtyPages = useCallback(async () => {
     const nextPages = [...pagesRef.current];
     let didChange = false;
@@ -388,13 +409,15 @@ function InfiniteInkCanvasImpl(
       0,
       Math.min(pagesRef.current.length - 1, pageIndex),
     );
+    setCurrentPage(boundedPageIndex);
+    void assignEnginesToPage(boundedPageIndex);
     viewportRef.current?.setTransform({
       scale: 1,
       translateX: 0,
       translateY: -(boundedPageIndex * pageHeight + contentPadding),
       animated,
     });
-  }, [contentPadding, pageHeight]);
+  }, [assignEnginesToPage, contentPadding, pageHeight, setCurrentPage]);
 
   const addPage = useCallback(async () => {
     const capturedPages = await captureDirtyPages();
@@ -463,13 +486,45 @@ function InfiniteInkCanvasImpl(
     },
     getCurrentPageIndex: () => currentPageIndexRef.current,
     scrollToPage,
+    runBenchmark: async (options) => {
+      const activeSlot = getCurrentPageSlot();
+      if (!activeSlot?.runBenchmark) {
+        throw new Error("Native benchmark runner is unavailable for the active page.");
+      }
+      return activeSlot.runBenchmark(options);
+    },
+    startBenchmarkRecording: async (options) => {
+      if (!enginePoolRef.current?.startBenchmarkRecording) {
+        throw new Error("Native benchmark recorder is unavailable for this notebook.");
+      }
+      benchmarkRecordingOptionsRef.current = options ?? {};
+      const didStart = await enginePoolRef.current.startBenchmarkRecording(options);
+      if (!didStart) {
+        benchmarkRecordingOptionsRef.current = null;
+      }
+      return didStart;
+    },
+    stopBenchmarkRecording: async () => {
+      if (!enginePoolRef.current?.stopBenchmarkRecording) {
+        throw new Error("Native benchmark recorder is unavailable for this notebook.");
+      }
+      const recordingOptions = benchmarkRecordingOptionsRef.current ?? {
+        scenario: "manual-notebook",
+        backend: renderBackend,
+      };
+      benchmarkRecordingOptionsRef.current = null;
+      const results = await enginePoolRef.current.stopBenchmarkRecording();
+      return aggregateNotebookBenchmarkResults(results, recordingOptions);
+    },
   }), [
     addPage,
     assignEnginesToPage,
     captureDirtyPages,
     getActiveSlot,
+    getCurrentPageSlot,
     pageWidth,
     replacePages,
+    renderBackend,
     scrollToPage,
     setCurrentPage,
   ]);
@@ -553,6 +608,7 @@ function InfiniteInkCanvasImpl(
               ref={enginePoolRef}
               canvasHeight={pageHeight}
               backgroundType={backgroundType}
+              renderBackend={renderBackend}
               pdfBackgroundBaseUri={pdfBackgroundBaseUri}
               fingerDrawingEnabled={fingerDrawingEnabled}
               getToolState={getToolState}

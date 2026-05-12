@@ -4,6 +4,7 @@ import {
   ContinuousEnginePool,
   type ContinuousEnginePoolAssignment,
   type ContinuousEnginePoolRef,
+  type ContinuousEnginePoolSlotRef,
   type ContinuousEnginePoolToolState,
 } from "../ContinuousEnginePool";
 import type { NotebookPage } from "../types";
@@ -16,6 +17,34 @@ const mockSetNativeProps = jest.fn();
 const mockUndo = jest.fn();
 const mockRedo = jest.fn();
 const mockClear = jest.fn();
+const mockRunBenchmark = jest.fn(async (options?: Record<string, unknown>) => ({
+  sessionId: "benchmark-session",
+  scenario: options?.scenario ?? "custom",
+  requestedBackend: options?.backend ?? "ganesh",
+  durationMs: 1,
+  fpsAverage: 60,
+  renderFrameCount: 1,
+  cpuFrameCount: 0,
+  ganeshFrameCount: 1,
+  ganeshFallbackFrameCount: 0,
+  droppedFrameCount: 0,
+  inputEventCount: 1,
+  syntheticStrokeCount: 1,
+  syntheticPointCount: 1,
+  renderMs: { count: 1, average: 1, p50: 1, p95: 1, p99: 1, max: 1 },
+  frameIntervalMs: { count: 1, average: 16, p50: 16, p95: 16, p99: 16, max: 16 },
+  inputToPresentLatencyMs: { count: 1, average: 4, p50: 4, p95: 4, p99: 4, max: 4 },
+  memory: {
+    startBytes: 1,
+    endBytes: 1,
+    peakBytes: 1,
+    lowBytes: 1,
+    deltaBytes: 0,
+    peakDeltaBytes: 0,
+  },
+}));
+const mockStartBenchmarkRecording = jest.fn(async () => true);
+const mockStopBenchmarkRecording = jest.fn(async () => mockRunBenchmark());
 const mockNativeCanvasProps: any[] = [];
 
 jest.mock("../NativeInkCanvas", () => {
@@ -35,6 +64,9 @@ jest.mock("../NativeInkCanvas", () => {
         loadBase64Data: mockLoadBase64Data,
         getBase64Data: mockGetBase64Data,
         releaseEngine: mockReleaseEngine,
+        runBenchmark: mockRunBenchmark,
+        startBenchmarkRecording: mockStartBenchmarkRecording,
+        stopBenchmarkRecording: mockStopBenchmarkRecording,
       }));
 
       React.useEffect(() => {
@@ -148,6 +180,17 @@ describe("ContinuousEnginePool", () => {
     expect(mockReleaseEngine).toHaveBeenCalledTimes(3);
   });
 
+  it("defaults pooled native canvases to the Ganesh backend", async () => {
+    renderPool();
+
+    await act(async () => {});
+
+    expect(mockNativeCanvasProps).toHaveLength(3);
+    for (const props of mockNativeCanvasProps) {
+      expect(props.renderBackend).toBe("ganesh");
+    }
+  });
+
   it("applies the latest current tool when a slot is assigned", async () => {
     const pages = [page(0), page(1), page(2), page(3)];
     let currentToolState: ContinuousEnginePoolToolState = {
@@ -220,5 +263,69 @@ describe("ContinuousEnginePool", () => {
     for (const props of mockNativeCanvasProps) {
       expect(props.onPencilDoubleTap).toBe(onPencilDoubleTap);
     }
+  });
+
+  it("forwards benchmark methods through the registered page slot", async () => {
+    const pages = [page(0), page(1), page(2)];
+    const registerPerPageSlot = jest.fn();
+    const { poolRef } = renderPool({ registerPerPageSlot });
+
+    await act(async () => {});
+    await assignPages(poolRef, buildAssignments(pages, 0));
+
+    const slotRef = registerPerPageSlot.mock.calls.find(
+      ([pageId, registeredRef]) => pageId === "page-0" && registeredRef,
+    )?.[1] as ContinuousEnginePoolSlotRef | undefined;
+
+    expect(slotRef).toBeDefined();
+    await expect(slotRef?.runBenchmark?.({
+      scenario: "eraser",
+      backend: "ganesh",
+      workload: "erase",
+      toolType: "eraser",
+    })).resolves.toMatchObject({
+      scenario: "eraser",
+      requestedBackend: "ganesh",
+    });
+    await expect(slotRef?.startBenchmarkRecording?.({
+      scenario: "manual",
+      backend: "cpu",
+    })).resolves.toBe(true);
+    await expect(slotRef?.stopBenchmarkRecording?.()).resolves.toMatchObject({
+      sessionId: "benchmark-session",
+    });
+
+    expect(mockRunBenchmark).toHaveBeenCalledWith({
+      scenario: "eraser",
+      backend: "ganesh",
+      workload: "erase",
+      toolType: "eraser",
+    });
+    expect(mockStartBenchmarkRecording).toHaveBeenCalledWith({
+      scenario: "manual",
+      backend: "cpu",
+    });
+    expect(mockStopBenchmarkRecording).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts and stops notebook benchmark recording across the mounted pool", async () => {
+    const pages = [page(0), page(1), page(2)];
+    const { poolRef } = renderPool();
+
+    await act(async () => {});
+    await assignPages(poolRef, buildAssignments(pages, 0));
+
+    await expect(poolRef.current?.startBenchmarkRecording({
+      scenario: "manual",
+      backend: "ganesh",
+    })).resolves.toBe(true);
+    await expect(poolRef.current?.stopBenchmarkRecording()).resolves.toHaveLength(3);
+
+    expect(mockStartBenchmarkRecording).toHaveBeenCalledTimes(3);
+    expect(mockStartBenchmarkRecording).toHaveBeenCalledWith({
+      scenario: "manual",
+      backend: "ganesh",
+    });
+    expect(mockStopBenchmarkRecording).toHaveBeenCalledTimes(3);
   });
 });

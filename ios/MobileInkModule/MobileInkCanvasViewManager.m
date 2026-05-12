@@ -10,6 +10,7 @@ RCT_EXPORT_VIEW_PROPERTY(onPencilDoubleTap, RCTDirectEventBlock)
 RCT_EXPORT_VIEW_PROPERTY(backgroundType, NSString)
 RCT_EXPORT_VIEW_PROPERTY(pdfBackgroundUri, NSString)
 RCT_EXPORT_VIEW_PROPERTY(renderSuspended, BOOL)
+RCT_EXPORT_VIEW_PROPERTY(renderBackend, NSString)
 RCT_EXPORT_VIEW_PROPERTY(drawingPolicy, NSString)
 
 RCT_EXTERN_METHOD(clear:(nonnull NSNumber *)node)
@@ -42,6 +43,17 @@ RCT_EXTERN_METHOD(performCopy:(nonnull NSNumber *)node)
 RCT_EXTERN_METHOD(performPaste:(nonnull NSNumber *)node)
 RCT_EXTERN_METHOD(performDelete:(nonnull NSNumber *)node)
 RCT_EXTERN_METHOD(simulatePencilDoubleTap:(nonnull NSNumber *)node
+                  callback:(RCTResponseSenderBlock)callback)
+
+RCT_EXTERN_METHOD(runBenchmark:(nonnull NSNumber *)node
+                  options:(NSDictionary *)options
+                  callback:(RCTResponseSenderBlock)callback)
+
+RCT_EXTERN_METHOD(startBenchmarkRecording:(nonnull NSNumber *)node
+                  options:(NSDictionary *)options
+                  callback:(RCTResponseSenderBlock)callback)
+
+RCT_EXTERN_METHOD(stopBenchmarkRecording:(nonnull NSNumber *)node
                   callback:(RCTResponseSenderBlock)callback)
 
 RCT_EXTERN_METHOD(releaseEngine:(nonnull NSNumber *)node

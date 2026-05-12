@@ -70,6 +70,21 @@ func isEmpty(_ engine: OpaquePointer) -> Bool
 @_silgen_name("renderToCanvas")
 func renderToCanvas(_ engine: OpaquePointer, _ canvas: OpaquePointer)
 
+@_silgen_name("createGaneshMetalContext")
+func createGaneshMetalContext(_ device: UnsafeMutableRawPointer, _ commandQueue: UnsafeMutableRawPointer) -> OpaquePointer?
+
+@_silgen_name("destroyGaneshMetalContext")
+func destroyGaneshMetalContext(_ context: OpaquePointer)
+
+@_silgen_name("renderToGaneshMetalTexture")
+func renderToGaneshMetalTexture(
+  _ engine: OpaquePointer,
+  _ context: OpaquePointer,
+  _ texture: UnsafeMutableRawPointer,
+  _ width: Int32,
+  _ height: Int32
+) -> Bool
+
 // MARK: - Skia Canvas Helpers
 @_silgen_name("createSkiaCanvas")
 func createSkiaCanvas(_ pixels: UnsafeMutableRawPointer, _ width: Int32, _ height: Int32, _ rowBytes: Int32) -> OpaquePointer?

@@ -10,30 +10,26 @@ import {
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   InfiniteInkCanvas,
-  type ContinuousEnginePoolToolState,
   type InfiniteInkCanvasRef,
+  type NativeInkRenderBackend,
   type SerializedNotebookData,
 } from "@mathnotes/mobile-ink";
+import {
+  tools,
+  type ToolConfig,
+} from "./benchmark";
+import { BenchmarkScreen } from "./BenchmarkScreen";
 
-type ToolConfig = ContinuousEnginePoolToolState & {
-  label: string;
-};
-
-const tools: ToolConfig[] = [
-  { label: "Pen", toolType: "pen", width: 3, color: "#111111", eraserMode: "pixel" },
-  { label: "Highlighter", toolType: "highlighter", width: 18, color: "#FFE066", eraserMode: "pixel" },
-  { label: "Crayon", toolType: "crayon", width: 9, color: "#1E6BFF", eraserMode: "pixel" },
-  { label: "Calligraphy", toolType: "calligraphy", width: 7, color: "#111111", eraserMode: "pixel" },
-  { label: "Eraser", toolType: "eraser", width: 64, color: "#FFFFFF", eraserMode: "pixel" },
-  { label: "Select", toolType: "select", width: 3, color: "#111111", eraserMode: "pixel" },
-];
+type AppMode = "draw" | "benchmark";
 
 const STORAGE_KEY = "mobile-ink-example-notebook";
 
 export default function App() {
   const canvasRef = useRef<InfiniteInkCanvasRef | null>(null);
+  const [mode, setMode] = useState<AppMode>("draw");
   const [activeTool, setActiveTool] = useState<ToolConfig>(tools[0]);
   const [drawWithFinger, setDrawWithFinger] = useState(false);
+  const [renderBackend, setRenderBackend] = useState<NativeInkRenderBackend>("ganesh");
   const [savedNotebook, setSavedNotebook] = useState<SerializedNotebookData | null>(null);
   const [storageStatus, setStorageStatus] = useState("not saved");
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
@@ -88,62 +84,106 @@ export default function App() {
   return (
     <SafeAreaView style={styles.screen}>
       <View style={styles.toolbar}>
-        <View style={styles.toggleRow}>
-          <Text style={styles.toggleLabel}>Draw with finger</Text>
-          <Switch value={drawWithFinger} onValueChange={setDrawWithFinger} />
+        <View style={styles.segmentGroup}>
+          {(["draw", "benchmark"] as AppMode[]).map((item) => (
+            <TouchableOpacity
+              key={item}
+              style={[styles.button, mode === item && styles.activeButton]}
+              onPress={() => setMode(item)}
+            >
+              <Text style={styles.buttonText}>{item === "draw" ? "Draw" : "Benchmark"}</Text>
+            </TouchableOpacity>
+          ))}
         </View>
 
-        {tools.map((tool) => (
-          <TouchableOpacity
-            key={tool.label}
-            style={[styles.button, activeTool.label === tool.label && styles.activeButton]}
-            onPress={() => applyTool(tool)}
-          >
-            <Text style={styles.buttonText}>{tool.label}</Text>
-          </TouchableOpacity>
-        ))}
+        {mode === "draw" ? (
+          <>
+            <View style={styles.segmentGroup}>
+              {(["ganesh", "cpu"] as NativeInkRenderBackend[]).map((item) => (
+                <TouchableOpacity
+                  key={item}
+                  style={[styles.button, renderBackend === item && styles.activeButton]}
+                  onPress={() => setRenderBackend(item)}
+                >
+                  <Text style={styles.buttonText}>{item === "ganesh" ? "Ganesh" : "CPU"}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
 
-        <TouchableOpacity style={styles.button} onPress={() => canvasRef.current?.undo()}>
-          <Text style={styles.buttonText}>Undo</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.button} onPress={() => canvasRef.current?.redo()}>
-          <Text style={styles.buttonText}>Redo</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.button} onPress={() => canvasRef.current?.clearCurrentPage()}>
-          <Text style={styles.buttonText}>Clear</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.button} onPress={() => canvasRef.current?.resetViewport(true)}>
-          <Text style={styles.buttonText}>Reset View</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.button} onPress={save}>
-          <Text style={styles.buttonText}>Save</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.button} onPress={reload}>
-          <Text style={styles.buttonText}>Reload</Text>
-        </TouchableOpacity>
+            <View style={styles.toggleRow}>
+              <Text style={styles.toggleLabel}>Draw with finger</Text>
+              <Switch value={drawWithFinger} onValueChange={setDrawWithFinger} />
+            </View>
+
+            {tools.map((tool) => (
+              <TouchableOpacity
+                key={tool.label}
+                style={[styles.button, activeTool.label === tool.label && styles.activeButton]}
+                onPress={() => applyTool(tool)}
+              >
+                <Text style={styles.buttonText}>{tool.label}</Text>
+              </TouchableOpacity>
+            ))}
+
+            <TouchableOpacity style={styles.button} onPress={() => canvasRef.current?.undo()}>
+              <Text style={styles.buttonText}>Undo</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.button} onPress={() => canvasRef.current?.redo()}>
+              <Text style={styles.buttonText}>Redo</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.button} onPress={() => canvasRef.current?.clearCurrentPage()}>
+              <Text style={styles.buttonText}>Clear</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.button} onPress={() => canvasRef.current?.resetViewport(true)}>
+              <Text style={styles.buttonText}>Reset View</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.button} onPress={save}>
+              <Text style={styles.buttonText}>Save</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.button} onPress={reload}>
+              <Text style={styles.buttonText}>Reload</Text>
+            </TouchableOpacity>
+          </>
+        ) : null}
       </View>
 
-      <View style={styles.statusBar}>
-        <Text style={styles.statusText}>Page {currentPageIndex + 1} / {pageCount}</Text>
-        <Text style={styles.statusText}>{isMoving ? "moving" : "settled"}</Text>
-        <Text style={styles.statusText}>{storageStatus}</Text>
-      </View>
+      {mode === "draw" ? (
+        <View style={styles.statusBar}>
+          <Text style={styles.statusText}>Page {currentPageIndex + 1} / {pageCount}</Text>
+          <Text style={styles.statusText}>{isMoving ? "moving" : "settled"}</Text>
+          <Text style={styles.statusText}>{storageStatus}</Text>
+          <Text style={styles.statusText}>Backend {renderBackend}</Text>
+        </View>
+      ) : null}
 
-      <InfiniteInkCanvas
-        ref={canvasRef}
-        style={styles.canvasHost}
-        initialPageCount={1}
-        pageWidth={820}
-        pageHeight={1061}
-        backgroundType="plain"
-        fingerDrawingEnabled={drawWithFinger}
-        toolState={activeTool}
-        minScale={1}
-        maxScale={5}
-        onCurrentPageChange={setCurrentPageIndex}
-        onPagesChange={(pages) => setPageCount(pages.length)}
-        onMotionStateChange={setIsMoving}
-      />
+      <View style={styles.contentArea}>
+        <InfiniteInkCanvas
+          ref={canvasRef}
+          style={styles.canvasHost}
+          initialPageCount={1}
+          pageWidth={820}
+          pageHeight={1061}
+          backgroundType="plain"
+          renderBackend={renderBackend}
+          fingerDrawingEnabled={mode === "benchmark" ? false : drawWithFinger}
+          toolState={activeTool}
+          minScale={1}
+          maxScale={5}
+          onCurrentPageChange={setCurrentPageIndex}
+          onPagesChange={(pages) => setPageCount(pages.length)}
+          onMotionStateChange={setIsMoving}
+        />
+
+        {mode === "benchmark" ? (
+          <BenchmarkScreen
+            backend={renderBackend}
+            canvasRef={canvasRef}
+            activeTool={activeTool}
+            applyTool={applyTool}
+            setBackend={setRenderBackend}
+          />
+        ) : null}
+      </View>
     </SafeAreaView>
   );
 }
@@ -161,6 +201,11 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
     borderBottomColor: "#D7DEE8",
     borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  segmentGroup: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
   },
   toggleRow: {
     alignItems: "center",
@@ -200,6 +245,9 @@ const styles = StyleSheet.create({
     color: "#4B5563",
     fontSize: 12,
     fontWeight: "700",
+  },
+  contentArea: {
+    flex: 1,
   },
   canvasHost: {
     flex: 1,

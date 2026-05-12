@@ -9,6 +9,15 @@ import React, {
 } from "react";
 import { StyleSheet, View } from "react-native";
 import { NativeInkCanvas } from "./NativeInkCanvas";
+import {
+  DEFAULT_NATIVE_INK_RENDER_BACKEND,
+} from "./benchmark";
+import type {
+  NativeInkBenchmarkOptions,
+  NativeInkBenchmarkRecordingOptions,
+  NativeInkBenchmarkResult,
+  NativeInkRenderBackend,
+} from "./benchmark";
 import type {
   NativeInkCanvasProps,
   NativeInkCanvasRef,
@@ -47,17 +56,23 @@ export type ContinuousEnginePoolSlotRef = {
   performCopy: () => void;
   performPaste: () => void;
   performDelete: () => void;
+  runBenchmark?: (options?: NativeInkBenchmarkOptions) => Promise<NativeInkBenchmarkResult>;
+  startBenchmarkRecording?: (options?: NativeInkBenchmarkRecordingOptions) => Promise<boolean>;
+  stopBenchmarkRecording?: () => Promise<NativeInkBenchmarkResult>;
 };
 
 export type ContinuousEnginePoolRef = {
   assignPages: (assignments: ContinuousEnginePoolAssignment[]) => Promise<void>;
   applyToolState: (toolState: ContinuousEnginePoolToolState) => void;
+  startBenchmarkRecording: (options?: NativeInkBenchmarkRecordingOptions) => Promise<boolean>;
+  stopBenchmarkRecording: () => Promise<NativeInkBenchmarkResult[]>;
   release: () => Promise<void>;
 };
 
 export type ContinuousEnginePoolProps = {
   canvasHeight: number;
   backgroundType: string;
+  renderBackend?: NativeInkRenderBackend;
   pdfBackgroundBaseUri: string | undefined;
   fingerDrawingEnabled: boolean;
   getToolState: () => ContinuousEnginePoolToolState;
@@ -96,6 +111,8 @@ type SlotAssignOptions = {
 type PooledCanvasSlotHandle = {
   assign: (options: SlotAssignOptions) => Promise<void>;
   applyToolState: (toolState: ContinuousEnginePoolToolState) => void;
+  startBenchmarkRecording: (options?: NativeInkBenchmarkRecordingOptions) => Promise<boolean>;
+  stopBenchmarkRecording: () => Promise<NativeInkBenchmarkResult | null>;
   release: () => Promise<void>;
 };
 
@@ -103,6 +120,7 @@ type PooledCanvasSlotProps = {
   poolIndex: number;
   canvasHeight: number;
   backgroundType: string;
+  renderBackend?: NativeInkRenderBackend;
   pdfBackgroundBaseUri?: string;
   drawingPolicy: "anyinput" | "pencilonly";
   getToolState: () => ContinuousEnginePoolToolState;
@@ -164,6 +182,7 @@ const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCanvasSlo
     poolIndex,
     canvasHeight,
     backgroundType,
+    renderBackend,
     pdfBackgroundBaseUri,
     drawingPolicy,
     getToolState,
@@ -189,6 +208,7 @@ const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCanvasSlo
     const assignmentKeyRef = useRef("");
     const loadTokenRef = useRef(0);
     const forwardedReadyRef = useRef(false);
+    const benchmarkRecordingActiveRef = useRef(false);
     const shouldCaptureBeforeReassignRef = useRef(shouldCaptureBeforeReassign);
     const captureCallbackRef = useRef(onCaptureBeforeReassign);
     const onCanvasReadyRef = useRef(onCanvasReady);
@@ -287,6 +307,24 @@ const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCanvasSlo
         },
         performDelete: () => {
           canvasRef.current?.performDelete();
+        },
+        runBenchmark: (options) => {
+          if (!canvasRef.current?.runBenchmark) {
+            return Promise.reject(new Error("Native benchmark runner is unavailable."));
+          }
+          return canvasRef.current.runBenchmark(options);
+        },
+        startBenchmarkRecording: (options) => {
+          if (!canvasRef.current?.startBenchmarkRecording) {
+            return Promise.reject(new Error("Native benchmark recorder is unavailable."));
+          }
+          return canvasRef.current.startBenchmarkRecording(options);
+        },
+        stopBenchmarkRecording: () => {
+          if (!canvasRef.current?.stopBenchmarkRecording) {
+            return Promise.reject(new Error("Native benchmark recorder is unavailable."));
+          }
+          return canvasRef.current.stopBenchmarkRecording();
         },
       }),
       [],
@@ -506,6 +544,10 @@ const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCanvasSlo
       loadTokenRef.current += 1;
       unregisterCurrentPage();
       if (nativeCanvas) {
+        if (benchmarkRecordingActiveRef.current) {
+          await nativeCanvas.stopBenchmarkRecording?.().catch(() => null);
+          benchmarkRecordingActiveRef.current = false;
+        }
         await captureLoadedPage(pageId, nativeCanvas);
         await nativeCanvas.releaseEngine?.().catch(() => {});
         if (lastAttachedCanvasRef.current === nativeCanvas) {
@@ -514,11 +556,57 @@ const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCanvasSlo
       }
     }, [captureLoadedPage, unregisterCurrentPage]);
 
+    const startBenchmarkRecording = useCallback(async (
+      options?: NativeInkBenchmarkRecordingOptions,
+    ) => {
+      if (benchmarkRecordingActiveRef.current) {
+        return true;
+      }
+      if (!isLoadedRef.current || !canvasRef.current?.startBenchmarkRecording) {
+        return false;
+      }
+
+      const didStart = await canvasRef.current.startBenchmarkRecording(options);
+      benchmarkRecordingActiveRef.current = didStart;
+      return didStart;
+    }, []);
+
+    const stopBenchmarkRecording = useCallback(async () => {
+      if (!benchmarkRecordingActiveRef.current) {
+        return null;
+      }
+      if (!canvasRef.current?.stopBenchmarkRecording) {
+        benchmarkRecordingActiveRef.current = false;
+        return null;
+      }
+
+      try {
+        const result = await canvasRef.current.stopBenchmarkRecording();
+        benchmarkRecordingActiveRef.current = false;
+        return result;
+      } catch (error) {
+        benchmarkRecordingActiveRef.current = false;
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes("not running")) {
+          return null;
+        }
+        throw error;
+      }
+    }, []);
+
     useImperativeHandle(ref, () => ({
       assign,
       applyToolState,
+      startBenchmarkRecording,
+      stopBenchmarkRecording,
       release,
-    }), [assign, applyToolState, release]);
+    }), [
+      assign,
+      applyToolState,
+      release,
+      startBenchmarkRecording,
+      stopBenchmarkRecording,
+    ]);
 
     useEffect(() => {
       return () => {
@@ -574,6 +662,7 @@ const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCanvasSlo
           ref={setNativeCanvasRef}
           style={styles.nativeCanvas}
           drawingPolicy={drawingPolicy}
+          renderBackend={renderBackend}
           onCanvasReady={handleNativeCanvasReady}
           onDrawingBegin={onDrawingBegin}
           onDrawingChange={handleDrawingChange}
@@ -587,6 +676,7 @@ const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCanvasSlo
   prev.poolIndex === next.poolIndex &&
   prev.canvasHeight === next.canvasHeight &&
   prev.backgroundType === next.backgroundType &&
+  prev.renderBackend === next.renderBackend &&
   prev.pdfBackgroundBaseUri === next.pdfBackgroundBaseUri &&
   prev.drawingPolicy === next.drawingPolicy &&
   prev.getToolState === next.getToolState &&
@@ -607,6 +697,7 @@ export const ContinuousEnginePool = memo(forwardRef<
 >(function ContinuousEnginePool({
   canvasHeight,
   backgroundType,
+  renderBackend = DEFAULT_NATIVE_INK_RENDER_BACKEND,
   pdfBackgroundBaseUri,
   fingerDrawingEnabled,
   getToolState,
@@ -628,6 +719,8 @@ export const ContinuousEnginePool = memo(forwardRef<
   );
   const onAssignmentReadyRef = useRef(onAssignmentReady);
   const onPageAssignmentReadyRef = useRef(onPageAssignmentReady);
+  const benchmarkRecordingOptionsRef = useRef<NativeInkBenchmarkRecordingOptions | null>(null);
+  const benchmarkRecordingSlotIndexesRef = useRef(new Set<number>());
 
   onAssignmentReadyRef.current = onAssignmentReady;
   onPageAssignmentReadyRef.current = onPageAssignmentReady;
@@ -650,6 +743,22 @@ export const ContinuousEnginePool = memo(forwardRef<
     }
 
     onPageAssignmentReadyRef.current?.(pageId, pageIndex, loadedAssignmentKey);
+  }, []);
+
+  const startSlotBenchmarkRecording = useCallback(async (
+    poolIndex: number,
+    slotRef: PooledCanvasSlotHandle | null | undefined,
+    options: NativeInkBenchmarkRecordingOptions,
+  ) => {
+    if (!slotRef || benchmarkRecordingSlotIndexesRef.current.has(poolIndex)) {
+      return false;
+    }
+
+    const didStart = await slotRef.startBenchmarkRecording(options);
+    if (didStart) {
+      benchmarkRecordingSlotIndexesRef.current.add(poolIndex);
+    }
+    return didStart;
   }, []);
 
   const assignPages = useCallback(async (
@@ -719,10 +828,29 @@ export const ContinuousEnginePool = memo(forwardRef<
     );
 
     await Promise.all(slotPromises);
+    const benchmarkRecordingOptions = benchmarkRecordingOptionsRef.current;
+    if (benchmarkRecordingOptions) {
+      await Promise.all(
+        nextSlotAssignments.map((assignment, poolIndex) => (
+          assignment
+            ? startSlotBenchmarkRecording(
+                poolIndex,
+                slotRefs.current[poolIndex],
+                benchmarkRecordingOptions,
+              )
+            : Promise.resolve(false)
+        )),
+      );
+    }
     if (assignmentKeyRef.current === nextAssignmentKey) {
       onAssignmentReadyRef.current?.(nextAssignmentKey);
     }
-  }, [backgroundType, canvasHeight, pdfBackgroundBaseUri]);
+  }, [
+    backgroundType,
+    canvasHeight,
+    pdfBackgroundBaseUri,
+    startSlotBenchmarkRecording,
+  ]);
 
   const applyToolState = useCallback((toolState: ContinuousEnginePoolToolState) => {
     for (const slotRef of slotRefs.current) {
@@ -730,7 +858,50 @@ export const ContinuousEnginePool = memo(forwardRef<
     }
   }, []);
 
+  const startBenchmarkRecording = useCallback(async (
+    options: NativeInkBenchmarkRecordingOptions = {},
+  ) => {
+    if (benchmarkRecordingOptionsRef.current) {
+      return true;
+    }
+
+    benchmarkRecordingOptionsRef.current = options;
+    benchmarkRecordingSlotIndexesRef.current.clear();
+    const starts = await Promise.all(
+      slotRefs.current.map((slotRef, poolIndex) => (
+        startSlotBenchmarkRecording(poolIndex, slotRef, options)
+      )),
+    );
+
+    const didStartAny = starts.some(Boolean);
+    if (!didStartAny) {
+      benchmarkRecordingOptionsRef.current = null;
+      benchmarkRecordingSlotIndexesRef.current.clear();
+    }
+    return didStartAny;
+  }, [startSlotBenchmarkRecording]);
+
+  const stopBenchmarkRecording = useCallback(async () => {
+    const recordingSlotIndexes = Array.from(
+      benchmarkRecordingSlotIndexesRef.current,
+    );
+    benchmarkRecordingOptionsRef.current = null;
+    benchmarkRecordingSlotIndexesRef.current.clear();
+
+    const results = await Promise.all(
+      recordingSlotIndexes.map((poolIndex) => (
+        slotRefs.current[poolIndex]?.stopBenchmarkRecording() ?? Promise.resolve(null)
+      )),
+    );
+
+    return results.filter(
+      (result): result is NativeInkBenchmarkResult => result !== null,
+    );
+  }, []);
+
   const release = useCallback(async () => {
+    benchmarkRecordingOptionsRef.current = null;
+    benchmarkRecordingSlotIndexesRef.current.clear();
     await Promise.all(
       slotRefs.current.map((slotRef) => slotRef?.release() ?? Promise.resolve()),
     );
@@ -739,8 +910,16 @@ export const ContinuousEnginePool = memo(forwardRef<
   useImperativeHandle(ref, () => ({
     assignPages,
     applyToolState,
+    startBenchmarkRecording,
+    stopBenchmarkRecording,
     release,
-  }), [applyToolState, assignPages, release]);
+  }), [
+    applyToolState,
+    assignPages,
+    release,
+    startBenchmarkRecording,
+    stopBenchmarkRecording,
+  ]);
 
   return (
     <>
@@ -751,6 +930,7 @@ export const ContinuousEnginePool = memo(forwardRef<
           poolIndex={poolIndex}
           canvasHeight={canvasHeight}
           backgroundType={backgroundType}
+          renderBackend={renderBackend}
           pdfBackgroundBaseUri={pdfBackgroundBaseUri}
           drawingPolicy={fingerDrawingEnabled ? "anyinput" : "pencilonly"}
           getToolState={getToolState}
@@ -770,6 +950,7 @@ export const ContinuousEnginePool = memo(forwardRef<
 }), (prev, next) => (
   prev.canvasHeight === next.canvasHeight &&
   prev.backgroundType === next.backgroundType &&
+  prev.renderBackend === next.renderBackend &&
   prev.pdfBackgroundBaseUri === next.pdfBackgroundBaseUri &&
   prev.fingerDrawingEnabled === next.fingerDrawingEnabled &&
   prev.getToolState === next.getToolState &&

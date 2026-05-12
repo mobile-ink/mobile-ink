@@ -15,6 +15,15 @@ import {
   NativeModules,
   NativeSyntheticEvent,
 } from 'react-native';
+import {
+  DEFAULT_NATIVE_INK_RENDER_BACKEND,
+} from './benchmark';
+import type {
+  NativeInkBenchmarkOptions,
+  NativeInkBenchmarkRecordingOptions,
+  NativeInkBenchmarkResult,
+  NativeInkRenderBackend,
+} from './benchmark';
 import type { NativeSelectionBounds } from './types';
 import { normalizePagePayloadForNativeLoad } from "./payload";
 
@@ -49,8 +58,18 @@ const LINKING_ERROR =
 
 const ComponentName = 'MobileInkCanvasView';
 
+const mobileInkCanvasViewConfig = UIManager.getViewManagerConfig(ComponentName) as
+  | { NativeProps?: Record<string, unknown> }
+  | null;
+const supportsRenderBackendProp =
+  !!mobileInkCanvasViewConfig?.NativeProps &&
+  Object.prototype.hasOwnProperty.call(
+    mobileInkCanvasViewConfig.NativeProps,
+    'renderBackend',
+  );
+
 const MobileInkCanvasViewNative =
-  UIManager.getViewManagerConfig(ComponentName) != null
+  mobileInkCanvasViewConfig != null
     ? requireNativeComponent<any>(ComponentName)
     : () => {
         throw new Error(LINKING_ERROR);
@@ -65,6 +84,8 @@ export interface NativeInkCanvasProps {
   backgroundType?: string;
   pdfBackgroundUri?: string;
   renderSuspended?: boolean;
+  /** iOS only: Chooses the native render path for A/B performance tests. */
+  renderBackend?: NativeInkRenderBackend;
   /** iOS only: Controls whether fingers or only Apple Pencil can draw */
   drawingPolicy?: 'default' | 'anyinput' | 'pencilonly';
   /** iOS only: Fired when Apple Pencil barrel is double-tapped (2nd gen+) */
@@ -144,6 +165,9 @@ export interface NativeInkCanvasRef {
   performPaste: () => void;
   performDelete: () => void;
   simulatePencilDoubleTap?: () => Promise<boolean>;
+  runBenchmark?: (options?: NativeInkBenchmarkOptions) => Promise<NativeInkBenchmarkResult>;
+  startBenchmarkRecording?: (options?: NativeInkBenchmarkRecordingOptions) => Promise<boolean>;
+  stopBenchmarkRecording?: () => Promise<NativeInkBenchmarkResult>;
 }
 
 export const NativeInkCanvas = forwardRef<
@@ -596,21 +620,96 @@ export const NativeInkCanvas = forwardRef<
         );
       });
     },
+
+    runBenchmark: async (
+      options: NativeInkBenchmarkOptions = {},
+    ): Promise<NativeInkBenchmarkResult> => {
+      const node = findNodeHandle(nativeRef.current);
+      if (!node || Platform.OS !== 'ios' || !MobileInkCanvasViewManager?.runBenchmark) {
+        throw new Error('Native benchmark runner is only available on iOS after rebuilding the app.');
+      }
+
+      return new Promise((resolve, reject) => {
+        MobileInkCanvasViewManager.runBenchmark(
+          node,
+          options,
+          (error: string | null, result: NativeInkBenchmarkResult | null) => {
+            if (error) {
+              reject(new Error(error));
+            } else if (!result) {
+              reject(new Error('Native benchmark finished without metrics.'));
+            } else {
+              resolve(result);
+            }
+          }
+        );
+      });
+    },
+
+    startBenchmarkRecording: async (
+      options: NativeInkBenchmarkRecordingOptions = {},
+    ): Promise<boolean> => {
+      const node = findNodeHandle(nativeRef.current);
+      if (!node || Platform.OS !== 'ios' || !MobileInkCanvasViewManager?.startBenchmarkRecording) {
+        throw new Error('Native benchmark recorder is only available on iOS after rebuilding the app.');
+      }
+
+      return new Promise((resolve, reject) => {
+        MobileInkCanvasViewManager.startBenchmarkRecording(
+          node,
+          options,
+          (error: string | null, success: boolean | null) => {
+            if (error) {
+              reject(new Error(error));
+            } else {
+              resolve(success === true);
+            }
+          }
+        );
+      });
+    },
+
+    stopBenchmarkRecording: async (): Promise<NativeInkBenchmarkResult> => {
+      const node = findNodeHandle(nativeRef.current);
+      if (!node || Platform.OS !== 'ios' || !MobileInkCanvasViewManager?.stopBenchmarkRecording) {
+        throw new Error('Native benchmark recorder is only available on iOS after rebuilding the app.');
+      }
+
+      return new Promise((resolve, reject) => {
+        MobileInkCanvasViewManager.stopBenchmarkRecording(
+          node,
+          (error: string | null, result: NativeInkBenchmarkResult | null) => {
+            if (error) {
+              reject(new Error(error));
+            } else if (!result) {
+              reject(new Error('Native benchmark recording stopped without metrics.'));
+            } else {
+              resolve(result);
+            }
+          }
+        );
+      });
+    },
   }), []);
 
+  const nativeProps = {
+    ref: handleNativeRef,
+    style: props.style,
+    onDrawingChange: props.onDrawingChange,
+    onDrawingBegin: props.onDrawingBegin,
+    onSelectionChange: props.onSelectionChange,
+    backgroundType: props.backgroundType,
+    pdfBackgroundUri: props.pdfBackgroundUri,
+    renderSuspended: props.renderSuspended,
+    drawingPolicy: props.drawingPolicy,
+    onPencilDoubleTap: props.onPencilDoubleTap,
+    ...(supportsRenderBackendProp
+      ? { renderBackend: props.renderBackend ?? DEFAULT_NATIVE_INK_RENDER_BACKEND }
+      : {}),
+  };
+
   return (
-    <MobileInkCanvasViewNative
-      ref={handleNativeRef}
-      style={props.style}
-      onDrawingChange={props.onDrawingChange}
-      onDrawingBegin={props.onDrawingBegin}
-      onSelectionChange={props.onSelectionChange}
-      backgroundType={props.backgroundType}
-      pdfBackgroundUri={props.pdfBackgroundUri}
-      renderSuspended={props.renderSuspended}
-      drawingPolicy={props.drawingPolicy}
-      onPencilDoubleTap={props.onPencilDoubleTap}
-    />
+    <MobileInkCanvasViewNative {...nativeProps} />
   );
 });
 

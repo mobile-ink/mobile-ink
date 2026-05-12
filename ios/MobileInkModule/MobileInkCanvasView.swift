@@ -55,15 +55,23 @@ enum PencilStrokeInputNormalizer {
 
 @objc(MobileInkCanvasView)
 class MobileInkCanvasView: MTKView {
-    private var drawingEngine: OpaquePointer?
+    var drawingEngine: OpaquePointer?
     private var commandQueue: MTLCommandQueue?
-    private var scaleX: CGFloat = 1.0
-    private var scaleY: CGFloat = 1.0
+    private var ganeshMetalContext: OpaquePointer?
+    var requestedRenderBackend: MobileInkRenderBackend = .ganesh
+    var benchmarkRecorder = MobileInkBenchmarkRecorder()
+    var isBenchmarkReplayRunning = false
+    var benchmarkRunToken = UUID()
+    private var useExperimentalGaneshBackend: Bool {
+        requestedRenderBackend == .ganesh
+    }
+    var scaleX: CGFloat = 1.0
+    var scaleY: CGFloat = 1.0
   private var pixelBuffer: UnsafeMutablePointer<UInt8>?
   private var pixelBufferLength: Int = 0
   private var pixelBytesPerRow: Int = 0
-  private var pixelWidth: Int32 = 0
-  private var pixelHeight: Int32 = 0
+  var pixelWidth: Int32 = 0
+  var pixelHeight: Int32 = 0
     private var enginePixelWidth: Int32 = 0
     private var enginePixelHeight: Int32 = 0
 
@@ -76,7 +84,7 @@ class MobileInkCanvasView: MTKView {
     private let holdToShapeDelay: TimeInterval = 0.30
     private let holdToShapeRetryDelay: TimeInterval = 0.06
     private var holdToShapeTimer: Timer?
-    private var isHoldToShapeStrokeActive = false
+    var isHoldToShapeStrokeActive = false
 
     // Eraser cursor
     private var eraserCursorLayer: CAShapeLayer?
@@ -101,6 +109,25 @@ class MobileInkCanvasView: MTKView {
     // Drawing policy: "default", "anyinput", or "pencilonly"
     // When "pencilonly", only Apple Pencil touches are processed for drawing
     @objc var drawingPolicy: String = "default"
+    @objc var renderBackend: String = MobileInkRenderBackend.ganesh.rawValue {
+        didSet {
+            let normalizedBackend = MobileInkRenderBackend(rawValue: renderBackend.lowercased()) ?? .ganesh
+            requestedRenderBackend = normalizedBackend
+
+            if normalizedBackend == .cpu {
+                if pixelWidth > 0 && pixelHeight > 0 {
+                    allocatePixelBuffer(width: Int(pixelWidth), height: Int(pixelHeight))
+                }
+            } else {
+                pixelBuffer?.deallocate()
+                pixelBuffer = nil
+                pixelBufferLength = 0
+                pixelBytesPerRow = 0
+            }
+
+            requestDisplay(forceWhenSuspended: true)
+        }
+    }
     @objc var renderSuspended: Bool = false {
         didSet {
             if oldValue != renderSuspended && !renderSuspended {
@@ -200,7 +227,7 @@ class MobileInkCanvasView: MTKView {
     /// would re-create the 13 MB buffer right after we just freed it,
     /// effectively undoing the release. Once true, never flips back --
     /// a released view is dead.
-    private var isReleased: Bool = false
+    var isReleased: Bool = false
 
     deinit {
         releaseHeavyNativeState()
@@ -221,6 +248,8 @@ class MobileInkCanvasView: MTKView {
         if isReleased { return }
         isReleased = true
 
+        benchmarkRunToken = UUID()
+        isBenchmarkReplayRunning = false
         holdToShapeTimer?.invalidate()
         holdToShapeTimer = nil
         pixelBuffer?.deallocate()
@@ -230,6 +259,10 @@ class MobileInkCanvasView: MTKView {
         if let engine = drawingEngine {
             destroyDrawingEngine(engine)
             drawingEngine = nil
+        }
+        if let context = ganeshMetalContext {
+            destroyGaneshMetalContext(context)
+            ganeshMetalContext = nil
         }
         // Drop any queued JS callbacks waiting for a Metal frame that
         // will never come now that we're off-screen. Without this they
@@ -651,6 +684,7 @@ class MobileInkCanvasView: MTKView {
                 let isPencilInput = PencilStrokeInputNormalizer.isPencil(touch)
                 let timestamp = Int64(touch.timestamp * 1000)  // Convert to milliseconds
                 touchBegan(engine, scaledX, scaledY, pressure, azimuth, altitude, timestamp, isPencilInput)
+                recordBenchmarkInputSample()
 
                 isDraggingSelection = true
                 lastDragPoint = location
@@ -663,6 +697,7 @@ class MobileInkCanvasView: MTKView {
             let isPencilInput = PencilStrokeInputNormalizer.isPencil(touch)
             let timestamp = Int64(touch.timestamp * 1000)  // Convert to milliseconds
             touchBegan(engine, scaledX, scaledY, pressure, azimuth, altitude, timestamp, isPencilInput)
+            recordBenchmarkInputSample()
             isHoldToShapeStrokeActive = true
             scheduleHoldToShapePreview(restart: true)
             requestDisplay()
@@ -834,6 +869,7 @@ class MobileInkCanvasView: MTKView {
             // Final stroke should only contain actual touch data, not predictions
             clearPredictedPoints(engine)
             touchEnded(engine, currentUptimeTimestampMillis())
+            recordBenchmarkInputSample()
             requestDisplay()
             onDrawingChange?([:])
         }
@@ -1144,7 +1180,7 @@ class MobileInkCanvasView: MTKView {
         isTextMode = (pendingTool == "text")
     }
 
-    private func resetTransientInteractionState() {
+    func resetTransientInteractionState() {
         isDraggingSelection = false
         isMovingSelection = false
         isTransformingSelection = false
@@ -1374,7 +1410,7 @@ class MobileInkCanvasView: MTKView {
         onDrawingChange?([:])
     }
 
-    private func notifySelectionChange() {
+    func notifySelectionChange() {
         guard let engine = drawingEngine else { return }
         let count = Int(getSelectionCount(engine))
         var payload: [String: Any] = ["count": count]
@@ -1572,7 +1608,14 @@ extension MobileInkCanvasView: MTKViewDelegate {
         if size.width > 0 && size.height > 0 {
             pixelWidth = Int32(size.width)
             pixelHeight = Int32(size.height)
-            allocatePixelBuffer(width: Int(size.width), height: Int(size.height))
+            if useExperimentalGaneshBackend {
+                pixelBuffer?.deallocate()
+                pixelBuffer = nil
+                pixelBufferLength = 0
+                pixelBytesPerRow = 0
+            } else {
+                allocatePixelBuffer(width: Int(size.width), height: Int(size.height))
+            }
         }
 
         if pixelWidth > 0 && pixelHeight > 0 {
@@ -1597,15 +1640,82 @@ extension MobileInkCanvasView: MTKViewDelegate {
     }
 
 
+    private func ensureGaneshMetalContext() -> OpaquePointer? {
+        if let context = ganeshMetalContext {
+            return context
+        }
+
+        guard let device = device, let commandQueue = commandQueue else {
+            return nil
+        }
+
+        let devicePtr = Unmanaged.passUnretained(device).toOpaque()
+        let queuePtr = Unmanaged.passUnretained(commandQueue).toOpaque()
+        ganeshMetalContext = createGaneshMetalContext(devicePtr, queuePtr)
+        if ganeshMetalContext != nil {
+            print("[MobileInk][Ganesh] Experimental Ganesh/Metal renderer enabled")
+        }
+        return ganeshMetalContext
+    }
+
+    private func attachPresentedLoadCallbacks(to commandBuffer: MTLCommandBuffer) {
+        guard !pendingPresentedLoadCallbacks.isEmpty else {
+            return
+        }
+
+        let loadCallbacks = pendingPresentedLoadCallbacks
+        pendingPresentedLoadCallbacks.removeAll()
+        commandBuffer.addCompletedHandler { _ in
+            DispatchQueue.main.async {
+                loadCallbacks.forEach { callback in
+                    callback([NSNull(), true])
+                }
+            }
+        }
+    }
+
     func draw(in view: MTKView) {
-        guard let engine = drawingEngine,
-              let commandBuffer = commandQueue?.makeCommandBuffer(),
-              let buffer = pixelBuffer else {
+        guard let engine = drawingEngine else {
             return
         }
 
         let width = pixelWidth
         let height = pixelHeight
+
+        if useExperimentalGaneshBackend,
+           let commandQueue = commandQueue,
+           let ganeshContext = ensureGaneshMetalContext(),
+           let freshDrawable = view.currentDrawable {
+            let texturePtr = Unmanaged.passUnretained(freshDrawable.texture).toOpaque()
+            let renderStart = CACurrentMediaTime()
+            if renderToGaneshMetalTexture(engine, ganeshContext, texturePtr, width, height) {
+                let renderDurationMs = (CACurrentMediaTime() - renderStart) * 1000.0
+                guard let commandBuffer = commandQueue.makeCommandBuffer() else {
+                    return
+                }
+                attachPresentedLoadCallbacks(to: commandBuffer)
+                attachBenchmarkFrameCallback(
+                    to: commandBuffer,
+                    backend: .ganesh,
+                    didFallbackFromGanesh: false,
+                    renderDurationMs: renderDurationMs
+                )
+                commandBuffer.present(freshDrawable)
+                commandBuffer.commit()
+                return
+            }
+        }
+
+        if useExperimentalGaneshBackend && pixelBuffer == nil && width > 0 && height > 0 {
+            allocatePixelBuffer(width: Int(width), height: Int(height))
+        }
+
+        guard let commandBuffer = commandQueue?.makeCommandBuffer(),
+              let buffer = pixelBuffer else {
+            return
+        }
+
+        let renderStart = CACurrentMediaTime()
         let bytesPerRow = pixelBytesPerRow
 
         // Clear pixel buffer to transparent (background view underneath will show through)
@@ -1630,18 +1740,15 @@ extension MobileInkCanvasView: MTKViewDelegate {
             withBytes: UnsafeRawPointer(buffer),
             bytesPerRow: bytesPerRow
         )
+        let renderDurationMs = (CACurrentMediaTime() - renderStart) * 1000.0
 
-        if !pendingPresentedLoadCallbacks.isEmpty {
-            let loadCallbacks = pendingPresentedLoadCallbacks
-            pendingPresentedLoadCallbacks.removeAll()
-            commandBuffer.addCompletedHandler { _ in
-                DispatchQueue.main.async {
-                    loadCallbacks.forEach { callback in
-                        callback([NSNull(), true])
-                    }
-                }
-            }
-        }
+        attachPresentedLoadCallbacks(to: commandBuffer)
+        attachBenchmarkFrameCallback(
+            to: commandBuffer,
+            backend: .cpu,
+            didFallbackFromGanesh: useExperimentalGaneshBackend,
+            renderDurationMs: renderDurationMs
+        )
 
         commandBuffer.present(freshDrawable)
         commandBuffer.commit()
@@ -1660,7 +1767,7 @@ extension MobileInkCanvasView {
         || pendingTool == "calligraphy")
   }
 
-  private func currentUptimeTimestampMillis() -> Int64 {
+  func currentUptimeTimestampMillis() -> Int64 {
     Int64(ProcessInfo.processInfo.systemUptime * 1000)
   }
 
@@ -1683,7 +1790,7 @@ extension MobileInkCanvasView {
     RunLoop.main.add(timer, forMode: .common)
   }
 
-  private func cancelHoldToShapePreview() {
+  func cancelHoldToShapePreview() {
     holdToShapeTimer?.invalidate()
     holdToShapeTimer = nil
   }
@@ -1720,6 +1827,7 @@ extension MobileInkCanvasView {
     let scaledY = Float(location.y * scaleY)
     let timestamp = Int64(touch.timestamp * 1000)  // Convert to milliseconds
     touchMoved(engine, scaledX, scaledY, pressure, azimuth, altitude, timestamp, isPencilInput)
+    recordBenchmarkInputSample()
   }
 
   // PREDICTIVE TOUCH: Process predicted touch samples for Apple Pencil low-latency rendering

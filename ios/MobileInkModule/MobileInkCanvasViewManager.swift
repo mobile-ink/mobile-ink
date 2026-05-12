@@ -81,6 +81,14 @@ class DrawingContainerView: UIView, UIPencilInteractionDelegate {
     }
   }
 
+  @objc var renderBackend: String? {
+    didSet {
+      if let backend = renderBackend {
+        drawingView?.renderBackend = backend
+      }
+    }
+  }
+
   // Drawing policy - controls whether fingers or only Apple Pencil can draw
   @objc var drawingPolicy: String? {
     didSet {
@@ -112,6 +120,9 @@ class DrawingContainerView: UIView, UIPencilInteractionDelegate {
     // Forward drawing policy
     if let policy = drawingPolicy {
       view.drawingPolicy = policy
+    }
+    if let backend = renderBackend {
+      view.renderBackend = backend
     }
     view.renderSuspended = renderSuspended
   }
@@ -319,6 +330,39 @@ class MobileInkCanvasViewManager: RCTViewManager {
          let view = self.findDrawingView(container) {
         view.simulatePencilDoubleTapForTesting()
         callback([NSNull(), true])
+      } else {
+        callback(["View not found", NSNull()])
+      }
+    }
+  }
+
+  @objc func runBenchmark(_ node: NSNumber, options: NSDictionary, callback: @escaping RCTResponseSenderBlock) {
+    DispatchQueue.main.async {
+      if let container = self.bridge.uiManager.view(forReactTag: node),
+         let view = self.findDrawingView(container) {
+        view.runBenchmark(options, callback: callback)
+      } else {
+        callback(["View not found", NSNull()])
+      }
+    }
+  }
+
+  @objc func startBenchmarkRecording(_ node: NSNumber, options: NSDictionary, callback: @escaping RCTResponseSenderBlock) {
+    DispatchQueue.main.async {
+      if let container = self.bridge.uiManager.view(forReactTag: node),
+         let view = self.findDrawingView(container) {
+        view.startBenchmarkRecording(options, callback: callback)
+      } else {
+        callback(["View not found", NSNull()])
+      }
+    }
+  }
+
+  @objc func stopBenchmarkRecording(_ node: NSNumber, callback: @escaping RCTResponseSenderBlock) {
+    DispatchQueue.main.async {
+      if let container = self.bridge.uiManager.view(forReactTag: node),
+         let view = self.findDrawingView(container) {
+        view.stopBenchmarkRecording(callback)
       } else {
         callback(["View not found", NSNull()])
       }

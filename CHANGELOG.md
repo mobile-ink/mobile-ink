@@ -2,6 +2,12 @@
 
 All notable changes to `@mathnotes/mobile-ink` will be documented here.
 
+## [0.2.0] - 2026-05-12
+
+- Defaulted the iOS renderer to the Ganesh/Metal path while keeping CPU selectable for A/B comparison and fallback.
+- Added on-device benchmark tooling for replayed strokes, manual notebook recordings, scroll sampling, multi-page suites, eraser, selection, and tool coverage.
+- Matched Ganesh output colors to the CPU path for highlighter, selection chrome, and other tool colors.
+
 ## [0.1.0] - 2026-05-07
 
 Initial public release.

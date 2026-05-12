@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name         = "MathNotesMobileInk"
-  s.version      = "0.1.0"
+  s.version      = "0.2.0"
   s.summary      = "Native Skia/Metal mobile ink engine for React Native"
   s.homepage     = "https://github.com/mathnotes-app/mobile-ink"
   s.license      = { :type => "Apache-2.0", :file => "LICENSE" }

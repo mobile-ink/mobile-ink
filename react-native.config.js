@@ -4,7 +4,11 @@ module.exports = {
       ios: {
         podspecPath: 'MathNotesMobileInk.podspec',
       },
-      android: null,
+      android: {
+        sourceDir: 'android',
+        packageImportPath: 'import com.mathnotes.mobileink.MobileInkPackage;',
+        packageInstance: 'new MobileInkPackage()',
+      },
     },
   },
 };

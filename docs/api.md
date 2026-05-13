@@ -32,7 +32,7 @@ High-level continuous notebook component.
 - `onPagesChange(pages)`: called when page growth or trimming changes the page array.
 - `onSelectionChange(pageId, count, bounds)`: native selection event by page.
 - `onMotionStateChange(isMoving)`: viewport gesture/momentum state.
-- `onPencilDoubleTap(event)`: Apple Pencil double-tap callback.
+- `onPencilDoubleTap(event)`: Apple Pencil double-tap callback on iOS.
 
 ### Ref
 

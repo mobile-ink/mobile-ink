@@ -1,0 +1,92 @@
+buildscript {
+    def kotlinVersion = rootProject.ext.has("kotlinVersion")
+        ? rootProject.ext.get("kotlinVersion")
+        : "2.1.20"
+
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath("com.android.tools.build:gradle:8.10.1")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion")
+    }
+}
+
+def safeExtGet(prop, fallback) {
+    rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
+}
+
+static def findNodeModules(baseDir) {
+    def basePath = baseDir.toPath().normalize()
+    while (basePath != null) {
+        def nodeModulesPath = basePath.resolve("node_modules").toFile()
+        def reactNativePath = new File(nodeModulesPath, "react-native")
+        if (nodeModulesPath.exists() && reactNativePath.exists()) {
+            return nodeModulesPath.absolutePath
+        }
+        basePath = basePath.getParent()
+    }
+    throw new GradleException("@mathnotes/mobile-ink: failed to find node_modules")
+}
+
+def reactNativeArchitectures() {
+    def value = project.getProperties().get("reactNativeArchitectures")
+    return value ? value.split(",") : ["armeabi-v7a", "x86", "x86_64", "arm64-v8a"]
+}
+
+apply plugin: "com.android.library"
+apply plugin: "kotlin-android"
+
+def nodeModules = findNodeModules(projectDir)
+
+android {
+    namespace "com.mathnotes.mobileink"
+    compileSdkVersion safeExtGet("compileSdkVersion", 35)
+
+    if (rootProject.ext.has("ndkPath")) {
+        ndkPath rootProject.ext.ndkPath
+    }
+    if (rootProject.ext.has("ndkVersion")) {
+        ndkVersion rootProject.ext.ndkVersion
+    }
+
+    defaultConfig {
+        minSdkVersion safeExtGet("minSdkVersion", 24)
+        targetSdkVersion safeExtGet("targetSdkVersion", 35)
+
+        externalNativeBuild {
+            cmake {
+                cppFlags "-std=c++17", "-frtti", "-fexceptions", "-DSK_BUILD_FOR_ANDROID", "-DON_ANDROID", "-DONANDROID"
+                arguments "-DNODE_MODULES_DIR=${nodeModules}",
+                    "-DANDROID_STL=c++_shared",
+                    "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
+                abiFilters(*reactNativeArchitectures())
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+            version "3.22.1"
+        }
+    }
+
+    packagingOptions {
+        excludes = [
+            "**/libc++_shared.so",
+            "META-INF/**"
+        ]
+    }
+}
+
+dependencies {
+    implementation "com.facebook.react:react-android"
+}

@@ -1,7 +1,7 @@
 {
   "name": "@mathnotes/mobile-ink",
   "version": "0.2.0",
-  "description": "Production-grade React Native ink engine with native Skia/Metal drawing and continuous canvas primitives.",
+  "description": "Production-grade React Native ink engine with native Skia drawing and continuous canvas primitives.",
   "license": "Apache-2.0",
   "author": "BuilderPro LLC",
   "private": false,
@@ -21,6 +21,7 @@
     "src/benchmark",
     "src/utils",
     "ios",
+    "android",
     "cpp",
     "docs/*.md",
     "CHANGELOG.md",

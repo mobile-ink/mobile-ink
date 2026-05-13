@@ -86,7 +86,7 @@ export interface NativeInkCanvasProps {
   renderSuspended?: boolean;
   /** iOS only: Chooses the native render path for A/B performance tests. */
   renderBackend?: NativeInkRenderBackend;
-  /** iOS only: Controls whether fingers or only Apple Pencil can draw */
+  /** Controls whether fingers or only stylus/Pencil input can draw. */
   drawingPolicy?: 'default' | 'anyinput' | 'pencilonly';
   /** iOS only: Fired when Apple Pencil barrel is double-tapped (2nd gen+) */
   onPencilDoubleTap?: (event: NativeSyntheticEvent<{ sequence: number; timestamp: number }>) => void;
@@ -761,7 +761,7 @@ export async function batchExportPages(
       if (!MobileInkBridge) {
         throw new Error('MobileInkBridge not found. Please rebuild the app.');
       }
-      // iOS: batchExportPages(pagesDataArray, backgroundTypes, width, height, scale, pdfUri)
+      // iOS: batchExportPages(pagesDataArray, backgroundTypes, width, height, scale, pdfUri, pageIndices)
       results = await MobileInkBridge.batchExportPages(
         sanitizedPagesData,
         backgroundTypes,
@@ -775,14 +775,15 @@ export async function batchExportPages(
       if (!MobileInkModule) {
         throw new Error('MobileInkModule not found. Please rebuild the app.');
       }
-      // Android: batchExportPages(pagesDataArray, backgroundTypes, width, height, scale, pdfUri)
+      // Android: batchExportPages(pagesDataArray, backgroundTypes, width, height, scale, pdfUri, pageIndices)
       results = await MobileInkModule.batchExportPages(
         sanitizedPagesData,
         backgroundTypes,
         width,
         height,
         scale,
-        pdfBackgroundUri || ''
+        pdfBackgroundUri || '',
+        pageIndices || []
       );
     }
 

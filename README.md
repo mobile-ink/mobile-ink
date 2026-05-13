@@ -14,7 +14,7 @@ Production-grade React Native ink primitives extracted from the MathNotes canvas
   <img src="https://raw.githubusercontent.com/mathnotes-app/mobile-ink/main/docs/assets/mobile-ink-cover.jpg" alt="Mobile Ink cover drawn inside the example canvas" width="680" />
 </p>
 
-`@mathnotes/mobile-ink` is an iOS-first native drawing engine for React Native apps. It gives you Apple Pencil input, Skia/Metal rendering, stroke serialization, selection, zoom, momentum scrolling, and a continuous notebook surface backed by a fixed native engine pool.
+`@mathnotes/mobile-ink` is a native drawing engine for React Native apps. It gives you Apple Pencil and stylus input, Skia-backed native rendering, stroke serialization, selection, zoom, momentum scrolling, and a continuous notebook surface backed by a fixed native engine pool.
 
 ## A Note To Contributors
 
@@ -37,12 +37,12 @@ mobile-ink is currently used in production in MathNotes: https://apps.apple.com/
 | Area | Current support |
 | --- | --- |
 | iOS Apple Pencil drawing | Used in production |
-| Native rendering | Custom `MTKView` backed by C++ Skia/Metal |
+| Android stylus/finger drawing | Native Android view backed by the same C++ engine |
+| Native rendering | iOS `MTKView` with Skia/Metal; Android `GLSurfaceView` with Skia/OpenGL upload |
 | Continuous notebooks | Fixed native engine pool with momentum scroll and pinch zoom |
 | Tools | Pen, highlighter, crayon, calligraphy, eraser, selection, and shape recognition |
 | Serialization | JSON notebook payloads plus native page load/save/export helpers |
 | Example app | Expo dev-client app with blank continuous notebook, tools, selection, save/reload, and zoom |
-| Android | Not supported yet |
 | Expo Go | Not supported because this package includes native code |
 
 ## Demos
@@ -68,7 +68,7 @@ npm install @mathnotes/mobile-ink \
 cd ios && pod install
 ```
 
-For Expo apps, use a dev client or prebuild. Expo Go cannot load this native module.
+For Expo apps, use a dev client or prebuild. Expo Go cannot load this native module. Android consumers need the normal React Native Android toolchain because the package builds a Kotlin/C++ Android library.
 
 Your app Babel config must include the Reanimated/Worklets plugin expected by your React Native/Reanimated version. For Expo SDK 54/Reanimated 4:
 
@@ -121,7 +121,7 @@ export function Notebook() {
 
 ## Public Surface
 
-- `NativeInkCanvas`: low-level native Skia/Metal drawing view.
+- `NativeInkCanvas`: low-level native Skia drawing view.
 - `ZoomableInkViewport`: production pinch, pan, momentum, focal-point zoom, and Apple Pencil/finger gesture routing.
 - `ContinuousEnginePool`: fixed-size native canvas pool for continuous notebooks.
 - `InfiniteInkCanvas`: full vertical continuous notebook shell with pooled native engines, trailing page creation, dirty-page serialization, zoom, momentum scroll, and generic page backgrounds.
@@ -144,6 +144,12 @@ For a simulator:
 npx expo run:ios
 ```
 
+For Android:
+
+```sh
+npx expo run:android
+```
+
 ## Documentation
 
 - [Architecture](docs/architecture.md)
@@ -159,7 +165,7 @@ Near-term work is focused on making the public package easier to adopt and easie
 - Tighten selection transform performance for large stroke groups.
 - Improve edge-case zoom behavior near page and canvas boundaries.
 - Continue hardening the example app as a small regression harness.
-- Explore Android after the iOS API surface has settled.
+- Keep Android behavior aligned with the iOS API surface as new native capabilities land.
 
 ## Development
 

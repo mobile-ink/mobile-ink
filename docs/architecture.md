@@ -24,12 +24,14 @@ flowchart TD
 - `ContinuousEnginePool` keeps a fixed number of native canvases mounted and reassigns them to pages.
 - `InfiniteInkCanvas` composes the viewport and pool into a generic continuous notebook shell.
 
-### iOS native bridge
+### Native bridges
 
-- `MobileInkCanvasView` is the Metal-backed native drawing surface.
-- `MobileInkCanvasViewManager` exposes React Native props and commands.
-- `MobileInkBridge` exposes batch export, notebook parsing, and persistence helpers that are not tied to a single view.
-- `MobileInkBackgroundView` renders generic page backgrounds.
+- iOS `MobileInkCanvasView` is the Metal-backed native drawing surface.
+- Android `MobileInkCanvasView` is a `GLSurfaceView` that renders the shared C++ engine into an OpenGL texture.
+- `MobileInkCanvasViewManager` exposes React Native props and commands on both platforms.
+- `MobileInkBridge` exposes iOS helpers that are not tied to a single view, including notebook parsing and continuous-window compose/decompose.
+- `MobileInkModule` exposes Android promise-based drawing persistence and batch export helpers.
+- `MobileInkBackgroundView` renders generic page backgrounds on iOS; Android backgrounds are rendered by the shared Skia engine inside the canvas.
 
 ### C++ Skia engine
 
@@ -57,4 +59,4 @@ Consumers own storage and decide how serialized notebook payloads move through t
 
 ## Native Memory Lifecycle
 
-The pool reuses native views for page changes. Heavy native state is released only on final unmount through `releaseEngine`, which prevents scroll-driven MTKView churn and keeps allocations flat during repeated page crossing.
+The pool reuses native views for page changes. Heavy native state is released only on final unmount through `releaseEngine` where the platform needs explicit teardown, which prevents scroll-driven native-view churn and keeps allocations flat during repeated page crossing.

@@ -82,16 +82,24 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
         // Try to load native library - don't crash if it fails
         nativeLibraryAvailable = ensureLibraryLoaded()
         isOpaque = false
+        isClickable = true
+        isFocusable = true
         surfaceTextureListener = this
     }
 
     override fun onSurfaceTextureAvailable(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
+        if (width > 0 && height > 0) {
+            surfaceTexture.setDefaultBufferSize(width, height)
+        }
         queueEvent {
             createRenderSurface(surfaceTexture, width, height)
         }
     }
 
     override fun onSurfaceTextureSizeChanged(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
+        if (width > 0 && height > 0) {
+            surfaceTexture.setDefaultBufferSize(width, height)
+        }
         queueEvent {
             makeRenderContextCurrent()
             configureSurfaceSize(width, height)

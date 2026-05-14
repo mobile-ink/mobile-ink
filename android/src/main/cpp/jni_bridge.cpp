@@ -772,6 +772,9 @@ Java_com_mathnotes_mobileink_MobileInkCanvasView_renderGaneshToCurrentSurface(
         samples = maxSamples;
     }
 
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, width, height);
+
     if (
         !ctx->ganeshSurface ||
         ctx->ganeshSurfaceWidth != width ||

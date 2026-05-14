@@ -2,7 +2,7 @@
 
 #include <vector>
 #include <cstdint>
-#include "SkiaDrawingEngine.h"
+#include "DrawingTypes.h"
 
 namespace nativedrawing {
 

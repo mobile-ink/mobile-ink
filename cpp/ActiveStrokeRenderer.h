@@ -6,7 +6,8 @@
 #include <include/core/SkPaint.h>
 #include <include/core/SkPoint.h>
 #include <include/core/SkImage.h>
-#include "SkiaDrawingEngine.h"  // For Point struct
+#include "DrawingTypes.h"
+#include <string>
 
 namespace nativedrawing {
 

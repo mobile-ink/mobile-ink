@@ -1,6 +1,7 @@
 #pragma once
 
-#include "SkiaDrawingEngine.h"
+#include "DrawingTypes.h"
+#include <include/core/SkRect.h>
 #include <string>
 #include <vector>
 

@@ -1,5 +1,6 @@
 #include "SkiaDrawingEngine.h"
 #include "ShapeRecognition.h"
+#include "DrawingHistory.h"
 #include "DrawingSelection.h"
 #include "BackgroundRenderer.h"
 #include "DrawingSerialization.h"
@@ -227,145 +228,19 @@ SkiaDrawingEngine::SkiaDrawingEngine(int width, int height)
 SkiaDrawingEngine::~SkiaDrawingEngine() = default;
 
 void SkiaDrawingEngine::commitDelta(StrokeDelta&& delta) {
-    // Any new operation invalidates the redo timeline.
-    redoStack_.clear();
-    undoStack_.push_back(std::move(delta));
-    // Cap depth: drop the oldest entry. Each entry is O(opSize) so the
-    // cap is purely about bounding the number of undo levels, not
-    // memory pressure (delta sizes don't grow with stroke count).
-    while (undoStack_.size() > MAX_HISTORY_ENTRIES) {
-        undoStack_.erase(undoStack_.begin());
-    }
+    commitStrokeDelta(undoStack_, redoStack_, std::move(delta), MAX_HISTORY_ENTRIES);
 }
 
 void SkiaDrawingEngine::recordPixelEraseCircleAdded(size_t strokeIndex, const EraserCircle& circle) {
-    // Find an existing entry for this stroke in the in-flight pixel
-    // erase delta, or create one. Most eraser drags touch a small set
-    // of strokes repeatedly so the linear scan is cheap.
-    for (auto& entry : pendingPixelEraseEntries_) {
-        if (entry.strokeIndex == strokeIndex) {
-            entry.addedCircles.push_back(circle);
-            return;
-        }
-    }
-    StrokeDelta::PixelEraseEntry entry;
-    entry.strokeIndex = strokeIndex;
-    entry.addedCircles.push_back(circle);
-    pendingPixelEraseEntries_.push_back(std::move(entry));
+    appendPixelEraseCircleToDelta(pendingPixelEraseEntries_, strokeIndex, circle);
 }
 
 void SkiaDrawingEngine::applyDelta(const StrokeDelta& delta) {
-    // Forward direction (used by redo).
-    switch (delta.kind) {
-        case StrokeDelta::Kind::AddStrokes: {
-            for (const auto& s : delta.addedStrokes) {
-                strokes_.push_back(s);
-            }
-            break;
-        }
-        case StrokeDelta::Kind::RemoveStrokes: {
-            // Erase in DESCENDING order so each erase doesn't
-            // invalidate the indices of yet-to-process entries.
-            for (auto it = delta.removedStrokes.rbegin(); it != delta.removedStrokes.rend(); ++it) {
-                if (it->first < strokes_.size()) {
-                    strokes_.erase(strokes_.begin() + static_cast<long>(it->first));
-                }
-            }
-            break;
-        }
-        case StrokeDelta::Kind::PixelErase: {
-            for (const auto& entry : delta.pixelEraseEntries) {
-                if (entry.strokeIndex >= strokes_.size()) continue;
-                auto& target = strokes_[entry.strokeIndex].erasedBy;
-                for (const auto& c : entry.addedCircles) target.push_back(c);
-                strokes_[entry.strokeIndex].cachedEraserCount = 0; // invalidate
-            }
-            break;
-        }
-        case StrokeDelta::Kind::MoveStrokes: {
-            for (size_t idx : delta.moveIndices) {
-                if (idx >= strokes_.size()) continue;
-                auto& s = strokes_[idx];
-                for (auto& p : s.points) { p.x += delta.moveDx; p.y += delta.moveDy; }
-                for (auto& c : s.erasedBy) { c.x += delta.moveDx; c.y += delta.moveDy; }
-                pathRenderer_->smoothPath(s.points, s.path);
-                s.cachedEraserCount = 0; // path-stamped circles need re-render
-            }
-            break;
-        }
-        case StrokeDelta::Kind::ReplaceStrokes: {
-            for (const auto& [idx, stroke] : delta.afterStrokes) {
-                if (idx < strokes_.size()) {
-                    strokes_[idx] = stroke;
-                }
-            }
-            break;
-        }
-        case StrokeDelta::Kind::Clear: {
-            strokes_.clear();
-            eraserCircles_.clear();
-            break;
-        }
-    }
+    applyStrokeDelta(delta, strokes_, eraserCircles_, *pathRenderer_);
 }
 
 void SkiaDrawingEngine::revertDelta(const StrokeDelta& delta) {
-    // Backward direction (used by undo).
-    switch (delta.kind) {
-        case StrokeDelta::Kind::AddStrokes: {
-            // Pop the same number we appended. Caller invariant: redo
-            // didn't run other ops in between (we cleared redo on commit
-            // and applied/reverted strictly in stack order).
-            for (size_t i = 0; i < delta.addedStrokes.size(); ++i) {
-                if (!strokes_.empty()) strokes_.pop_back();
-            }
-            break;
-        }
-        case StrokeDelta::Kind::RemoveStrokes: {
-            // Re-insert in ASCENDING order. Earlier insertions shift
-            // later targets into the right places.
-            for (const auto& [idx, stroke] : delta.removedStrokes) {
-                size_t clamped = std::min(idx, strokes_.size());
-                strokes_.insert(strokes_.begin() + static_cast<long>(clamped), stroke);
-            }
-            break;
-        }
-        case StrokeDelta::Kind::PixelErase: {
-            for (const auto& entry : delta.pixelEraseEntries) {
-                if (entry.strokeIndex >= strokes_.size()) continue;
-                auto& target = strokes_[entry.strokeIndex].erasedBy;
-                for (size_t i = 0; i < entry.addedCircles.size() && !target.empty(); ++i) {
-                    target.pop_back();
-                }
-                strokes_[entry.strokeIndex].cachedEraserCount = 0;
-            }
-            break;
-        }
-        case StrokeDelta::Kind::MoveStrokes: {
-            for (size_t idx : delta.moveIndices) {
-                if (idx >= strokes_.size()) continue;
-                auto& s = strokes_[idx];
-                for (auto& p : s.points) { p.x -= delta.moveDx; p.y -= delta.moveDy; }
-                for (auto& c : s.erasedBy) { c.x -= delta.moveDx; c.y -= delta.moveDy; }
-                pathRenderer_->smoothPath(s.points, s.path);
-                s.cachedEraserCount = 0;
-            }
-            break;
-        }
-        case StrokeDelta::Kind::ReplaceStrokes: {
-            for (const auto& [idx, stroke] : delta.beforeStrokes) {
-                if (idx < strokes_.size()) {
-                    strokes_[idx] = stroke;
-                }
-            }
-            break;
-        }
-        case StrokeDelta::Kind::Clear: {
-            strokes_ = delta.clearedStrokes;
-            eraserCircles_ = delta.clearedEraserCircles;
-            break;
-        }
-    }
+    revertStrokeDelta(delta, strokes_, eraserCircles_, *pathRenderer_);
 }
 
 void SkiaDrawingEngine::touchBegan(

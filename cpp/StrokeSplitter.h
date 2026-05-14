@@ -1,7 +1,7 @@
 #pragma once
 
 #include <vector>
-#include "SkiaDrawingEngine.h"
+#include "DrawingTypes.h"
 
 namespace nativedrawing {
 

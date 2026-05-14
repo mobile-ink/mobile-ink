@@ -7,13 +7,9 @@ import React, {
   useState,
 } from 'react';
 import {
-  requireNativeComponent,
   UIManager,
   findNodeHandle,
   Platform,
-  ViewStyle,
-  NativeModules,
-  NativeSyntheticEvent,
 } from 'react-native';
 import {
   DEFAULT_NATIVE_INK_RENDER_BACKEND,
@@ -22,153 +18,30 @@ import type {
   NativeInkBenchmarkOptions,
   NativeInkBenchmarkRecordingOptions,
   NativeInkBenchmarkResult,
-  NativeInkRenderBackend,
 } from './benchmark';
-import type { NativeSelectionBounds } from './types';
 import { normalizePagePayloadForNativeLoad } from "./payload";
+import {
+  MobileInkBridge,
+  MobileInkCanvasViewManager,
+  MobileInkCanvasViewNative,
+  MobileInkModule,
+  supportsRenderBackendProp,
+} from "./native-ink-canvas/nativeModules";
+import type {
+  NativeInkCanvasProps,
+  NativeInkCanvasRef,
+} from "./native-ink-canvas/types";
 
-// NativeModules for callback-based methods
-// iOS uses MobileInkCanvasViewManager (ViewManager methods)
-// Android uses MobileInkModule (separate module with promise-based API)
-const MobileInkCanvasViewManager = Platform.OS === 'ios'
-  ? NativeModules.MobileInkCanvasViewManager
-  : null;
-const MobileInkModule = Platform.OS === 'android'
-  ? NativeModules.MobileInkModule
-  : null;
-// MobileInkBridge for iOS batch export (static methods not tied to view)
-const MobileInkBridge = Platform.OS === 'ios'
-  ? NativeModules.MobileInkBridge
-  : null;
-
-if (__DEV__) {
-  if (Platform.OS === 'ios' && !MobileInkCanvasViewManager) {
-    console.warn('[NativeInkCanvas] MobileInkCanvasViewManager not found in NativeModules. Drawing serialization may not work.');
-  }
-  if (Platform.OS === 'android' && !MobileInkModule) {
-    console.warn('[NativeInkCanvas] MobileInkModule not found in NativeModules. Drawing serialization may not work.');
-  }
-}
-
-const LINKING_ERROR =
-  `The package 'MobileInkCanvasView' doesn't seem to be linked. Make sure: \n\n` +
-  Platform.select({ ios: "- You have run 'pod install'\n", default: '' }) +
-  '- You rebuilt the app after installing the package\n' +
-  '- You are not using Expo Go\n';
-
-const ComponentName = 'MobileInkCanvasView';
-
-const mobileInkCanvasViewConfig = UIManager.getViewManagerConfig(ComponentName) as
-  | { NativeProps?: Record<string, unknown> }
-  | null;
-const supportsRenderBackendProp =
-  !!mobileInkCanvasViewConfig?.NativeProps &&
-  Object.prototype.hasOwnProperty.call(
-    mobileInkCanvasViewConfig.NativeProps,
-    'renderBackend',
-  );
-
-const MobileInkCanvasViewNative =
-  mobileInkCanvasViewConfig != null
-    ? requireNativeComponent<any>(ComponentName)
-    : () => {
-        throw new Error(LINKING_ERROR);
-      };
-
-export interface NativeInkCanvasProps {
-  style?: ViewStyle;
-  onDrawingChange?: () => void;
-  onDrawingBegin?: (event: NativeSyntheticEvent<{ x: number; y: number }>) => void;
-  onSelectionChange?: (event: { nativeEvent: { count: number; bounds?: NativeSelectionBounds | null } }) => void;
-  onCanvasReady?: () => void;
-  backgroundType?: string;
-  pdfBackgroundUri?: string;
-  renderSuspended?: boolean;
-  /** iOS only: Chooses the native render path for A/B performance tests. */
-  renderBackend?: NativeInkRenderBackend;
-  /** iOS only: Controls whether fingers or only Apple Pencil can draw */
-  drawingPolicy?: 'default' | 'anyinput' | 'pencilonly';
-  /** iOS only: Fired when Apple Pencil barrel is double-tapped (2nd gen+) */
-  onPencilDoubleTap?: (event: NativeSyntheticEvent<{ sequence: number; timestamp: number }>) => void;
-}
-
-export interface NativeInkCanvasRef {
-  setNativeProps?: (nativeProps: Record<string, unknown>) => void;
-  clear: () => void;
-  undo: () => void;
-  redo: () => void;
-  setTool: (toolType: string, width: number, color: string, eraserMode?: string) => void;
-  getBase64Data: () => Promise<string>;
-  loadBase64Data: (base64String: string) => Promise<boolean>;
-  /**
-   * Eagerly release the heavy native state (~13 MB pixel buffer + the
-   * C++ drawing engine + queued JS callbacks) without waiting for ARC.
-   * The continuous engine pool calls this only on final pool unmount,
-   * never for normal page switching. Optional so tests don't have to
-   * mock it; iOS-only.
-   */
-  releaseEngine?: () => Promise<void>;
-  /**
-   * Native-side single-page persistence: tells the engine to serialize its
-   * current state (one page payload) and write directly to the file at
-   * `path`. Body bytes never cross the JS<->native bridge.
-   *
-   * Useful for paged-mode (Android primary) where one engine = one page.
-   * Continuous mode should use persistFullNotebookToFile instead so non-
-   * visible pages are preserved.
-   */
-  persistEngineToFile: (path: string) => Promise<boolean>;
-  loadEngineFromFile: (path: string) => Promise<boolean>;
-  /**
-   * Native-side full-notebook autosave (iOS continuous mode).
-   *
-   * Reads the existing body file, replaces ONLY the visible window's
-   * per-page data with the engine's fresh state, writes back atomically.
-   * Body bytes (which can be many MB) never cross the JS<->native bridge:
-   * JS only sends the small visible-page-IDs array + lightweight
-   * pagesMetadata (no data fields).
-   *
-   * Returns true on success. Returns false (without throwing) when the
-   * native fast-path isn't available (older build) so callers can fall
-   * back to the existing slow path.
-   */
-  persistFullNotebookToFile: (params: {
-    visiblePageIds: string[];
-    pagesMetadata: Array<Record<string, unknown>>;
-    originalCanvasWidth?: number;
-    pageHeight: number;
-    bodyPath: string;
-  }) => Promise<boolean>;
-  /**
-   * Inverse of persistFullNotebookToFile. Reads the body file in native,
-   * loads visible-window pages into the engine, returns just the slim
-   * metadata array (no per-page data) plus the originalCanvasWidth.
-   *
-   * Returns null (without throwing) when the file is missing, malformed,
-   * or the native fast-path isn't available.
-   */
-  loadNotebookForVisibleWindow: (params: {
-    bodyPath: string;
-    visiblePageIds: string[];
-    pageHeight: number;
-  }) => Promise<{
-    success: boolean;
-    pagesMetadata?: Array<Record<string, unknown>>;
-    originalCanvasWidth?: number | null;
-    reason?: string;
-  } | null>;
-  stageBase64Data?: (base64String: string) => Promise<boolean>;
-  presentDeferredLoad?: () => Promise<boolean>;
-  getBase64PngData: (scale?: number) => Promise<string>;
-  getBase64JpegData: (scale?: number, compression?: number) => Promise<string>;
-  performCopy: () => void;
-  performPaste: () => void;
-  performDelete: () => void;
-  simulatePencilDoubleTap?: () => Promise<boolean>;
-  runBenchmark?: (options?: NativeInkBenchmarkOptions) => Promise<NativeInkBenchmarkResult>;
-  startBenchmarkRecording?: (options?: NativeInkBenchmarkRecordingOptions) => Promise<boolean>;
-  stopBenchmarkRecording?: () => Promise<NativeInkBenchmarkResult>;
-}
+export type {
+  NativeInkCanvasProps,
+  NativeInkCanvasRef,
+} from "./native-ink-canvas/types";
+export {
+  batchExportPages,
+  composeContinuousWindow,
+  decomposeContinuousWindow,
+  readBodyFileParsed,
+} from "./native-ink-canvas/notebookBridge";
 
 export const NativeInkCanvas = forwardRef<
   NativeInkCanvasRef,
@@ -714,150 +587,3 @@ export const NativeInkCanvas = forwardRef<
 });
 
 NativeInkCanvas.displayName = 'NativeInkCanvas';
-
-/**
- * Batch export multiple pages to PNG images natively.
- * This is much faster than exporting pages one by one because it:
- * 1. Creates a single Skia engine and surface (reused for all pages)
- * 2. Doesn't switch visible pages (no UI updates)
- * 3. Processes all pages in a single native call
- *
- * @param pagesData Array of page data objects (JSON format with base64 drawing data)
- * @param backgroundTypes Array of background type strings per page
- * @param width Canvas width in pixels
- * @param height Canvas height in pixels
- * @param scale Export scale factor (e.g., 2.0 for retina)
- * @param pdfBackgroundUri Optional PDF file URI for PDF backgrounds
- * @returns Array of base64 PNG data URIs
- */
-export async function batchExportPages(
-  pagesData: string[],
-  backgroundTypes: string[],
-  width: number,
-  height: number,
-  scale: number = 2.0,
-  pdfBackgroundUri?: string,
-  pageIndices?: number[],
-): Promise<string[]> {
-  if (pagesData.length === 0) {
-    return [];
-  }
-
-  __DEV__ && console.log(`[BatchExport] Starting native batch export of ${pagesData.length} pages at ${width}x${height} scale=${scale}`);
-  const startTime = Date.now();
-
-  try {
-    const sanitizedPagesData = pagesData.map((pageData, index) => {
-      const normalized = normalizePagePayloadForNativeLoad(pageData);
-      if (!normalized.isValid) {
-        console.warn(`[BatchExport] Replacing invalid page payload at index ${index} with a blank page (${normalized.reasonCode})`);
-        return '{"pages":{}}';
-      }
-      return normalized.normalizedPayload || '{"pages":{}}';
-    });
-    let results: string[];
-
-    if (Platform.OS === 'ios') {
-      if (!MobileInkBridge) {
-        throw new Error('MobileInkBridge not found. Please rebuild the app.');
-      }
-      // iOS: batchExportPages(pagesDataArray, backgroundTypes, width, height, scale, pdfUri)
-      results = await MobileInkBridge.batchExportPages(
-        sanitizedPagesData,
-        backgroundTypes,
-        width,
-        height,
-        scale,
-        pdfBackgroundUri || '',
-        pageIndices || []
-      );
-    } else {
-      if (!MobileInkModule) {
-        throw new Error('MobileInkModule not found. Please rebuild the app.');
-      }
-      // Android: batchExportPages(pagesDataArray, backgroundTypes, width, height, scale, pdfUri)
-      results = await MobileInkModule.batchExportPages(
-        sanitizedPagesData,
-        backgroundTypes,
-        width,
-        height,
-        scale,
-        pdfBackgroundUri || ''
-      );
-    }
-
-    const elapsed = Date.now() - startTime;
-    const successCount = results.filter(r => r && r.length > 0).length;
-    __DEV__ && console.log(`[BatchExport] Completed ${successCount}/${pagesData.length} pages in ${elapsed}ms`);
-
-    return results;
-  } catch (error) {
-    console.error('[BatchExport] Native batch export failed:', error);
-    throw error;
-  }
-}
-
-/**
- * Native body-file read + parse.
- *
- * Reads the notebook body file in C++ via NSJSONSerialization and returns
- * the parsed structure to JS. Skips Hermes JSON.parse on a multi-MB string,
- * which is the dominant cost of opening a heavy notebook.
- *
- * Resolves with `null` if the file doesn't exist (caller treats as new file)
- * or if the native fast path isn't available (older build). Rejects on real
- * read/parse errors so the caller can fall back to the slow path.
- *
- * iOS-only: MobileInkBridge ships the parser. Android falls through to
- * the existing JS-side read+parse path.
- */
-export async function readBodyFileParsed(
-  bodyPath: string,
-): Promise<Record<string, unknown> | null> {
-  if (Platform.OS !== 'ios' || !MobileInkBridge?.readBodyFileParsed) {
-    return null;
-  }
-  try {
-    const result = await MobileInkBridge.readBodyFileParsed(bodyPath);
-    if (result === null || result === undefined) return null;
-    if (typeof result !== 'object') return null;
-    return result as Record<string, unknown>;
-  } catch (error) {
-    // Native parse failed -- fall through to JS-side read.
-    if (__DEV__) {
-      console.warn('[NativeInkCanvas] readBodyFileParsed failed:', error);
-    }
-    return null;
-  }
-}
-
-export async function composeContinuousWindow(
-  pagePayloads: string[],
-  pageHeight: number
-): Promise<string> {
-  if (Platform.OS !== 'ios') {
-    throw new Error('Continuous window composition is only available on iOS.');
-  }
-
-  if (!MobileInkBridge?.composeContinuousWindow) {
-    throw new Error('MobileInkBridge.composeContinuousWindow not found. Please rebuild the app.');
-  }
-
-  return MobileInkBridge.composeContinuousWindow(pagePayloads, pageHeight);
-}
-
-export async function decomposeContinuousWindow(
-  windowPayload: string,
-  pageCount: number,
-  pageHeight: number
-): Promise<string[]> {
-  if (Platform.OS !== 'ios') {
-    throw new Error('Continuous window decomposition is only available on iOS.');
-  }
-
-  if (!MobileInkBridge?.decomposeContinuousWindow) {
-    throw new Error('MobileInkBridge.decomposeContinuousWindow not found. Please rebuild the app.');
-  }
-
-  return MobileInkBridge.decomposeContinuousWindow(windowPayload, pageCount, pageHeight);
-}

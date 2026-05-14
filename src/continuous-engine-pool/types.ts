@@ -24,6 +24,7 @@ export type ContinuousEnginePoolToolState = {
 
 export type ContinuousEnginePoolSlotRef = {
   getBase64Data: () => Promise<string>;
+  getPreviewData: (scale?: number) => Promise<string | null>;
   isLoaded: () => boolean;
   setTool: (
     toolType: string,
@@ -78,7 +79,11 @@ export type ContinuousEnginePoolProps = {
     sourceRef?: ContinuousEnginePoolSlotRef,
   ) => void;
   shouldCaptureBeforeReassign: (pageId: string) => boolean;
-  onSlotCaptureBeforeUnmount: (pageId: string, data: string) => void;
+  onSlotCaptureBeforeUnmount: (
+    pageId: string,
+    data: string,
+    previewUri?: string,
+  ) => void;
 };
 
 export type PooledCanvasSlotAssignOptions = {
@@ -126,7 +131,11 @@ export type PooledCanvasSlotProps = {
     sourceRef?: ContinuousEnginePoolSlotRef,
   ) => void;
   shouldCaptureBeforeReassign: (pageId: string) => boolean;
-  onCaptureBeforeReassign: (pageId: string, data: string) => void;
+  onCaptureBeforeReassign: (
+    pageId: string,
+    data: string,
+    previewUri?: string,
+  ) => void;
 };
 
 export type NativeCanvasRef = NativeInkCanvasRef;

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Platform,
   SafeAreaView,
@@ -29,6 +29,10 @@ const supportsRenderBackendToggle = Platform.OS === "ios";
 
 export default function App() {
   const canvasRef = useRef<InfiniteInkCanvasRef | null>(null);
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const canvasReadyRef = useRef(false);
+  const hasUserEditedRef = useRef(false);
+  const pendingNotebookRef = useRef<SerializedNotebookData | null>(null);
   const [mode, setMode] = useState<AppMode>("draw");
   const [activeTool, setActiveTool] = useState<ToolConfig>(tools[0]);
   const [drawWithFinger, setDrawWithFinger] = useState(false);
@@ -39,6 +43,21 @@ export default function App() {
   const [pageCount, setPageCount] = useState(1);
   const [isMoving, setIsMoving] = useState(false);
 
+  const loadNotebook = useCallback(async (notebookData: SerializedNotebookData) => {
+    await canvasRef.current?.loadNotebookData(notebookData);
+    hasUserEditedRef.current = false;
+    setStorageStatus("saved on disk");
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+    };
+  }, []);
+
   useEffect(() => {
     let isMounted = true;
     AsyncStorage.getItem(STORAGE_KEY)
@@ -47,8 +66,15 @@ export default function App() {
           return;
         }
 
-        setSavedNotebook(JSON.parse(rawNotebook) as SerializedNotebookData);
+        const notebookData = JSON.parse(rawNotebook) as SerializedNotebookData;
+        setSavedNotebook(notebookData);
         setStorageStatus("saved on disk");
+
+        if (canvasReadyRef.current && !hasUserEditedRef.current) {
+          void loadNotebook(notebookData);
+        } else {
+          pendingNotebookRef.current = notebookData;
+        }
       })
       .catch(() => {
         if (isMounted) {
@@ -59,30 +85,62 @@ export default function App() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [loadNotebook]);
 
   const applyTool = (tool: ToolConfig) => {
     setActiveTool(tool);
     canvasRef.current?.setTool(tool);
   };
 
-  const save = async () => {
-    const notebookData = await canvasRef.current?.getNotebookData();
-    if (!notebookData) {
-      return;
+  const save = useCallback(async () => {
+    try {
+      setStorageStatus("saving...");
+      const notebookData = await canvasRef.current?.getNotebookData();
+      if (!notebookData) {
+        setStorageStatus("save unavailable");
+        return;
+      }
+
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(notebookData));
+      setSavedNotebook(notebookData);
+      setStorageStatus("saved on disk");
+    } catch {
+      setStorageStatus("save failed");
+    }
+  }, []);
+
+  const scheduleAutosave = useCallback(() => {
+    hasUserEditedRef.current = true;
+    setStorageStatus("unsaved changes");
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
     }
 
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(notebookData));
-    setSavedNotebook(notebookData);
-    setStorageStatus("saved on disk");
-  };
+    autosaveTimerRef.current = setTimeout(() => {
+      autosaveTimerRef.current = null;
+      void save();
+    }, 1000);
+  }, [save]);
 
   const reload = async () => {
     const notebookData = savedNotebook;
     if (notebookData) {
-      await canvasRef.current?.loadNotebookData(notebookData);
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+      await loadNotebook(notebookData);
     }
   };
+
+  const handleCanvasReady = useCallback(() => {
+    canvasReadyRef.current = true;
+    const pendingNotebook = pendingNotebookRef.current;
+    if (pendingNotebook && !hasUserEditedRef.current) {
+      pendingNotebookRef.current = null;
+      void loadNotebook(pendingNotebook);
+    }
+  }, [loadNotebook]);
 
   return (
     <SafeAreaView style={styles.screen}>
@@ -176,6 +234,8 @@ export default function App() {
           toolState={activeTool}
           minScale={1}
           maxScale={5}
+          onReady={handleCanvasReady}
+          onDrawingChange={scheduleAutosave}
           onCurrentPageChange={setCurrentPageIndex}
           onPagesChange={(pages) => setPageCount(pages.length)}
           onMotionStateChange={setIsMoving}

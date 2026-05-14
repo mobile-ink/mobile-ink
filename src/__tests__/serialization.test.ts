@@ -319,6 +319,26 @@ describe('serialization round-trip', () => {
     expect(deserializedPages[1].pdfPageNumber).toBe(2);
     expect(deserializedPages[2].pdfPageNumber).toBe(3);
   });
+
+  it('preserves page preview metadata through round-trip', () => {
+    const originalPages: NotebookPage[] = [
+      {
+        id: 'page-1',
+        title: 'Page 1',
+        rotation: 0,
+        data: 'drawing',
+        dataSignature: '7:drawing',
+        previewUri: 'data:image/png;base64,preview',
+        previewDataSignature: '7:drawing',
+      },
+    ];
+
+    const serialized = serializeNotebookData(originalPages);
+    const { pages: deserializedPages } = deserializeNotebookData(serialized);
+
+    expect(deserializedPages[0].previewUri).toBe('data:image/png;base64,preview');
+    expect(deserializedPages[0].previewDataSignature).toBe('7:drawing');
+  });
 });
 
 describe('data integrity edge cases', () => {

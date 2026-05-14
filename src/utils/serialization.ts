@@ -1,4 +1,5 @@
 import { NotebookPage, SerializedNotebookData, TextBox } from '../types';
+import { computeDataSignature } from './dataSignature';
 
 /**
  * Serialization utilities for notebook data persistence.
@@ -17,6 +18,9 @@ export const serializeNotebookData = (pages: NotebookPage[], canvasWidth?: numbe
       id: p.id,
       title: p.title,
       data: p.data,
+      dataSignature: p.dataSignature,
+      previewUri: p.previewUri,
+      previewDataSignature: p.previewDataSignature,
       rotation: p.rotation,
       textBoxes: p.textBoxes,
       insertedElements: p.insertedElements,
@@ -59,17 +63,6 @@ function createBlankPdfPages(startIndex: number, pageCount: number): NotebookPag
  * path (readBodyFileParsed -> structured object) can share the same
  * migration logic without paying a JSON.parse round-trip on the JS side.
  */
-// Stable content fingerprint for a page's base64 body. Used by the
-// preview-cache machinery to detect real content changes vs. mere
-// in-memory eviction. Same shape as computePayloadSignature in
-// useContinuousPageManagement -- duplicated here so the pure
-// serialization layer doesn't need to import that hook.
-const computeDataSignature = (data: string): string => {
-  const len = data.length;
-  if (len <= 128) return `${len}:${data}`;
-  return `${len}:${data.slice(0, 64)}:${data.slice(-64)}`;
-};
-
 export const buildNotebookFromParsed = (
   data: SerializedNotebookData | null | undefined,
 ): DeserializedNotebookData => {

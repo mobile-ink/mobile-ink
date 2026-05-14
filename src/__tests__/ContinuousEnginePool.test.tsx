@@ -12,6 +12,7 @@ import type { NotebookPage } from "../types";
 
 const mockLoadBase64Data = jest.fn(async () => true);
 const mockGetBase64Data = jest.fn(async () => '{"pages":{"0":"persisted"}}');
+const mockGetBase64PngData = jest.fn(async () => "data:image/png;base64,preview");
 const mockReleaseEngine = jest.fn(async () => undefined);
 const mockSetTool = jest.fn();
 const mockSetNativeProps = jest.fn();
@@ -64,6 +65,7 @@ jest.mock("../NativeInkCanvas", () => {
         setNativeProps: mockSetNativeProps,
         loadBase64Data: mockLoadBase64Data,
         getBase64Data: mockGetBase64Data,
+        getBase64PngData: mockGetBase64PngData,
         releaseEngine: mockReleaseEngine,
         runBenchmark: mockRunBenchmark,
         startBenchmarkRecording: mockStartBenchmarkRecording,
@@ -174,6 +176,7 @@ describe("ContinuousEnginePool", () => {
     expect(onSlotCaptureBeforeUnmount).toHaveBeenCalledWith(
       "page-0",
       '{"pages":{"0":"persisted"}}',
+      "data:image/png;base64,preview",
     );
 
     view.unmount();

@@ -43,6 +43,7 @@ import type {
   InfiniteInkViewportTransform,
 } from "./infinite-ink-canvas/types";
 import { getContinuousEnginePoolRange } from "./utils/continuousEnginePool";
+import { computeDataSignature } from "./utils/dataSignature";
 import {
   BLANK_PAGE_PAYLOAD,
   withSingleTrailingBlankPage,
@@ -53,6 +54,32 @@ export type {
   InfiniteInkCanvasRef,
   InfiniteInkViewportTransform,
 } from "./infinite-ink-canvas/types";
+
+const PAGE_PREVIEW_CAPTURE_SCALE = 0.25;
+
+const withCapturedPageData = (
+  page: NotebookPage,
+  data: string,
+  previewUri?: string,
+): NotebookPage => {
+  const dataSignature = computeDataSignature(data);
+  const hasFreshPreview = Boolean(previewUri);
+  const hasMatchingPreview = page.previewDataSignature === dataSignature;
+
+  return {
+    ...page,
+    data,
+    dataSignature,
+    previewUri: hasFreshPreview
+      ? previewUri
+      : hasMatchingPreview
+        ? page.previewUri
+        : undefined,
+    previewDataSignature: hasFreshPreview || hasMatchingPreview
+      ? dataSignature
+      : undefined,
+  };
+};
 
 function InfiniteInkCanvasImpl(
   {
@@ -220,13 +247,17 @@ function InfiniteInkCanvasImpl(
     return dirtyPageIdsRef.current.has(pageId);
   }, []);
 
-  const updatePageData = useCallback((pageId: string, data: string) => {
+  const updatePageData = useCallback((
+    pageId: string,
+    data: string,
+    previewUri?: string,
+  ) => {
     if (!data) {
       return;
     }
 
     const nextPages = pagesRef.current.map((page) => (
-      page.id === pageId ? { ...page, data } : page
+      page.id === pageId ? withCapturedPageData(page, data, previewUri) : page
     ));
     dirtyPageIdsRef.current.delete(pageId);
     replacePages(withSingleTrailingBlankPage(nextPages, dirtyPageIdsRef.current));
@@ -276,12 +307,17 @@ function InfiniteInkCanvasImpl(
       }
 
       const data = await slotRef.getBase64Data();
+      const previewUri = await slotRef.getPreviewData(PAGE_PREVIEW_CAPTURE_SCALE);
       const pageIndex = nextPages.findIndex((page) => page.id === pageId);
       if (pageIndex === -1 || !data) {
         continue;
       }
 
-      nextPages[pageIndex] = { ...nextPages[pageIndex], data };
+      nextPages[pageIndex] = withCapturedPageData(
+        nextPages[pageIndex],
+        data,
+        previewUri ?? undefined,
+      );
       dirtyPageIdsRef.current.delete(pageId);
       didChange = true;
     }
@@ -361,7 +397,13 @@ function InfiniteInkCanvasImpl(
         getActiveSlot()?.clear();
         const nextPages = pagesRef.current.map((candidatePage) => (
           candidatePage.id === page.id
-            ? { ...candidatePage, data: BLANK_PAGE_PAYLOAD }
+            ? {
+                ...candidatePage,
+                data: BLANK_PAGE_PAYLOAD,
+                dataSignature: computeDataSignature(BLANK_PAGE_PAYLOAD),
+                previewUri: undefined,
+                previewDataSignature: undefined,
+              }
             : candidatePage
         ));
         replacePages(withSingleTrailingBlankPage(nextPages, dirtyPageIdsRef.current));

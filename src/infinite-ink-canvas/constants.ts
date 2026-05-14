@@ -1,0 +1,4 @@
+export const DEFAULT_PAGE_WIDTH = 820;
+export const DEFAULT_PAGE_HEIGHT = 1061;
+export const DEFAULT_INITIAL_PAGE_COUNT = 1;
+export const DEFAULT_CONTENT_PADDING = 16;

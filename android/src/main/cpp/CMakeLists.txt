@@ -28,19 +28,15 @@ include_directories(
     ${NATIVE_DRAWING_CPP_DIR}
 )
 
+file(GLOB NATIVE_DRAWING_SOURCES CONFIGURE_DEPENDS
+    "${NATIVE_DRAWING_CPP_DIR}/*.cpp"
+)
+
 # Add source files
 add_library(
     mobileink
     SHARED
-    ${NATIVE_DRAWING_CPP_DIR}/SkiaDrawingEngine.cpp
-    ${NATIVE_DRAWING_CPP_DIR}/DrawingSelection.cpp
-    ${NATIVE_DRAWING_CPP_DIR}/BackgroundRenderer.cpp
-    ${NATIVE_DRAWING_CPP_DIR}/DrawingSerialization.cpp
-    ${NATIVE_DRAWING_CPP_DIR}/PathRenderer.cpp
-    ${NATIVE_DRAWING_CPP_DIR}/EraserRenderer.cpp
-    ${NATIVE_DRAWING_CPP_DIR}/StrokeSplitter.cpp
-    ${NATIVE_DRAWING_CPP_DIR}/BatchExporter.cpp
-    ${NATIVE_DRAWING_CPP_DIR}/ActiveStrokeRenderer.cpp
+    ${NATIVE_DRAWING_SOURCES}
     jni_bridge.cpp
 )
 

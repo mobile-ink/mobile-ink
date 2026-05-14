@@ -239,6 +239,23 @@ describe("ContinuousEnginePool", () => {
     expect(mockLoadBase64Data).not.toHaveBeenCalled();
   });
 
+  it("retries page loads until the native engine accepts the payload", async () => {
+    const pages = [page(0)];
+    mockLoadBase64Data
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const { poolRef } = renderPool();
+
+    await act(async () => {});
+    await assignPages(poolRef, buildAssignments(pages, 0));
+
+    expect(mockLoadBase64Data).toHaveBeenCalledTimes(3);
+    expect(mockLoadBase64Data).toHaveBeenNthCalledWith(1, "data-0");
+    expect(mockLoadBase64Data).toHaveBeenNthCalledWith(2, "data-0");
+    expect(mockLoadBase64Data).toHaveBeenNthCalledWith(3, "data-0");
+  });
+
   it("preserves already loaded page slots across adjacent page changes", async () => {
     const pages = [page(0), page(1), page(2), page(3)];
     const { poolRef } = renderPool();

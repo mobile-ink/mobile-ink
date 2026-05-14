@@ -14,6 +14,7 @@ import type { NativeSelectionBounds } from "../types";
 import {
   BLANK_PAGE_PAYLOAD,
   getPdfBackgroundUri,
+  loadCanvasDataWithRetry,
   OFFSCREEN_TOP,
   waitForNextFrame,
 } from "./helpers";
@@ -340,7 +341,13 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
       loadedPageIdRef.current = null;
 
       try {
-        await canvas.loadBase64Data(assignment.page.data || BLANK_PAGE_PAYLOAD);
+        const didLoad = await loadCanvasDataWithRetry(
+          canvas,
+          assignment.page.data || BLANK_PAGE_PAYLOAD,
+        );
+        if (!didLoad) {
+          throw new Error(`Native canvas engine was not ready for page ${nextPageId}.`);
+        }
         if (loadTokenRef.current !== token) {
           return;
         }

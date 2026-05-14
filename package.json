@@ -12,6 +12,7 @@
     "lib",
     "src/continuous-engine-pool",
     "src/ContinuousEnginePool.tsx",
+    "src/infinite-ink-canvas",
     "src/InfiniteInkCanvas.tsx",
     "src/native-ink-canvas",
     "src/NativeInkCanvas.tsx",

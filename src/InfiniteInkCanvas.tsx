@@ -3,17 +3,10 @@ import React, {
   useCallback,
   useEffect,
   useImperativeHandle,
-  useMemo,
   useRef,
   useState,
 } from "react";
-import {
-  StyleProp,
-  StyleSheet,
-  Text,
-  View,
-  ViewStyle,
-} from "react-native";
+import { View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { ContinuousEnginePool } from "./ContinuousEnginePool";
 import type {
@@ -22,143 +15,44 @@ import type {
   ContinuousEnginePoolSlotRef,
   ContinuousEnginePoolToolState,
 } from "./ContinuousEnginePool";
-import NativeInkPageBackground from "./NativeInkPageBackground";
-import type {
-  NativeInkBenchmarkOptions,
-  NativeInkBenchmarkRecordingOptions,
-  NativeInkBenchmarkResult,
-  NativeInkRenderBackend,
-} from "./benchmark";
+import type { NativeInkBenchmarkRecordingOptions } from "./benchmark";
 import {
   aggregateNotebookBenchmarkResults,
   DEFAULT_NATIVE_INK_RENDER_BACKEND,
 } from "./benchmark";
 import ZoomableInkViewport from "./ZoomableInkViewport";
 import type { ZoomableInkViewportRef } from "./ZoomableInkViewport";
+import type { NativeSelectionBounds, NotebookPage } from "./types";
+import {
+  DEFAULT_CONTENT_PADDING,
+  DEFAULT_INITIAL_PAGE_COUNT,
+  DEFAULT_PAGE_HEIGHT,
+  DEFAULT_PAGE_WIDTH,
+} from "./infinite-ink-canvas/constants";
+import {
+  clonePage,
+  createInitialPages,
+  getVisiblePageIndex,
+  parseNotebookData,
+} from "./infinite-ink-canvas/notebookPages";
+import { PageBackgrounds, PageBreaks } from "./infinite-ink-canvas/PageStack";
+import { styles } from "./infinite-ink-canvas/styles";
 import type {
-  NativeInkPencilDoubleTapEvent,
-  NativeSelectionBounds,
-  NotebookPage,
-  SerializedNotebookData,
-} from "./types";
+  InfiniteInkCanvasProps,
+  InfiniteInkCanvasRef,
+  InfiniteInkViewportTransform,
+} from "./infinite-ink-canvas/types";
 import { getContinuousEnginePoolRange } from "./utils/continuousEnginePool";
 import {
   BLANK_PAGE_PAYLOAD,
-  createBlankPage,
   withSingleTrailingBlankPage,
 } from "./utils/pageGrowth";
-const DEFAULT_PAGE_WIDTH = 820;
-const DEFAULT_PAGE_HEIGHT = 1061;
-const DEFAULT_INITIAL_PAGE_COUNT = 1;
-const DEFAULT_CONTENT_PADDING = 16;
 
-export type InfiniteInkViewportTransform = {
-  scale: number;
-  translateX: number;
-  translateY: number;
-  containerWidth: number;
-  containerHeight: number;
-};
-
-export type InfiniteInkCanvasRef = {
-  getNotebookData: () => Promise<SerializedNotebookData>;
-  loadNotebookData: (data: SerializedNotebookData | string) => Promise<void>;
-  addPage: () => Promise<void>;
-  undo: () => void;
-  redo: () => void;
-  clearCurrentPage: () => void;
-  setTool: (toolState: ContinuousEnginePoolToolState) => void;
-  resetViewport: (animated?: boolean) => void;
-  getCurrentPageIndex: () => number;
-  scrollToPage: (pageIndex: number, animated?: boolean) => void;
-  runBenchmark?: (options?: NativeInkBenchmarkOptions) => Promise<NativeInkBenchmarkResult>;
-  startBenchmarkRecording?: (options?: NativeInkBenchmarkRecordingOptions) => Promise<boolean>;
-  stopBenchmarkRecording?: () => Promise<NativeInkBenchmarkResult>;
-};
-
-export type InfiniteInkCanvasProps = {
-  style?: StyleProp<ViewStyle>;
-  initialData?: SerializedNotebookData | string;
-  initialPageCount?: number;
-  pageWidth?: number;
-  pageHeight?: number;
-  backgroundType?: string;
-  renderBackend?: NativeInkRenderBackend;
-  pdfBackgroundBaseUri?: string;
-  fingerDrawingEnabled?: boolean;
-  toolState: ContinuousEnginePoolToolState;
-  minScale?: number;
-  maxScale?: number;
-  contentPadding?: number;
-  showPageLabels?: boolean;
-  onReady?: () => void;
-  onDrawingChange?: (pageId: string) => void;
-  onSelectionChange?: (
-    pageId: string,
-    count: number,
-    bounds: NativeSelectionBounds | null,
-  ) => void;
-  onCurrentPageChange?: (pageIndex: number) => void;
-  onPagesChange?: (pages: NotebookPage[]) => void;
-  onMotionStateChange?: (isMoving: boolean) => void;
-  onPencilDoubleTap?: (event: NativeInkPencilDoubleTapEvent) => void;
-};
-
-const clonePage = (page: NotebookPage, pageIndex: number): NotebookPage => ({
-  ...page,
-  id: page.id || `page-${pageIndex + 1}`,
-  title: page.title || `Page ${pageIndex + 1}`,
-  data: page.data || BLANK_PAGE_PAYLOAD,
-  rotation: page.rotation ?? 0,
-});
-
-const parseNotebookData = (
-  data: SerializedNotebookData | string | undefined,
-): SerializedNotebookData | null => {
-  if (!data) {
-    return null;
-  }
-
-  if (typeof data !== "string") {
-    return data;
-  }
-
-  const parsed = JSON.parse(data) as SerializedNotebookData;
-  if (!Array.isArray(parsed.pages)) {
-    throw new Error("Invalid mobile-ink notebook data: pages must be an array.");
-  }
-  return parsed;
-};
-
-const createInitialPages = (
-  initialData: SerializedNotebookData | string | undefined,
-  initialPageCount: number,
-) => {
-  const parsed = parseNotebookData(initialData);
-  if (parsed?.pages.length) {
-    return withSingleTrailingBlankPage(parsed.pages.map(clonePage));
-  }
-
-  return withSingleTrailingBlankPage(Array.from(
-    { length: Math.max(1, initialPageCount) },
-    (_, pageIndex) => createBlankPage(pageIndex),
-  ));
-};
-
-const getVisiblePageIndex = (
-  transform: InfiniteInkViewportTransform,
-  pageHeight: number,
-  pageCount: number,
-  contentPadding: number,
-) => {
-  const scale = Math.max(transform.scale, 0.0001);
-  const visibleTopY = Math.max(0, (-transform.translateY) / scale - contentPadding);
-  const visibleCenterY = visibleTopY + transform.containerHeight / (2 * scale);
-  return Math.max(
-    0,
-    Math.min(pageCount - 1, Math.floor(visibleCenterY / pageHeight)),
-  );
-};
+export type {
+  InfiniteInkCanvasProps,
+  InfiniteInkCanvasRef,
+  InfiniteInkViewportTransform,
+} from "./infinite-ink-canvas/types";
 
 function InfiniteInkCanvasImpl(
   {
@@ -541,43 +435,6 @@ function InfiniteInkCanvasImpl(
     void assignEnginesToPage(currentPageIndexRef.current);
   }, [assignEnginesToPage, onReady]);
 
-  const pageBackgrounds = useMemo(() => pages.map((page, pageIndex) => {
-    const pdfBackgroundUri = backgroundType === "pdf" && pdfBackgroundBaseUri
-      ? `${pdfBackgroundBaseUri}#page=${page.pdfPageNumber || pageIndex + 1}`
-      : undefined;
-
-    return (
-      <View
-        key={`mobile-ink-page-background-${page.id}`}
-        pointerEvents="none"
-        style={[
-          styles.page,
-          {
-            top: pageIndex * pageHeight,
-            width: pageWidth,
-            height: pageHeight,
-          },
-        ]}
-      >
-        <NativeInkPageBackground
-          style={StyleSheet.absoluteFillObject}
-          backgroundType={backgroundType}
-          pdfBackgroundUri={pdfBackgroundUri}
-        />
-        {showPageLabels ? (
-          <Text style={styles.pageLabel}>{pageIndex + 1}</Text>
-        ) : null}
-      </View>
-    );
-  }), [
-    backgroundType,
-    pageHeight,
-    pageWidth,
-    pages,
-    pdfBackgroundBaseUri,
-    showPageLabels,
-  ]);
-
   return (
     <GestureHandlerRootView style={[styles.root, style]}>
       <ZoomableInkViewport
@@ -603,7 +460,14 @@ function InfiniteInkCanvasImpl(
               height: contentHeight,
             }}
           >
-            {pageBackgrounds}
+            <PageBackgrounds
+              pages={pages}
+              pageWidth={pageWidth}
+              pageHeight={pageHeight}
+              backgroundType={backgroundType}
+              pdfBackgroundBaseUri={pdfBackgroundBaseUri}
+              showPageLabels={showPageLabels}
+            />
             <ContinuousEnginePool
               ref={enginePoolRef}
               canvasHeight={pageHeight}
@@ -620,16 +484,7 @@ function InfiniteInkCanvasImpl(
               shouldCaptureBeforeReassign={shouldCaptureBeforeReassign}
               onSlotCaptureBeforeUnmount={updatePageData}
             />
-            {pages.slice(1).map((page, pageIndex) => (
-              <View
-                key={`mobile-ink-page-break-${page.id}`}
-                pointerEvents="none"
-                style={[
-                  styles.pageBreak,
-                  { top: (pageIndex + 1) * pageHeight - StyleSheet.hairlineWidth / 2 },
-                ]}
-              />
-            ))}
+            <PageBreaks pages={pages} pageHeight={pageHeight} />
           </View>
         </View>
       </ZoomableInkViewport>
@@ -642,44 +497,5 @@ export const InfiniteInkCanvas = forwardRef<InfiniteInkCanvasRef, InfiniteInkCan
 );
 
 InfiniteInkCanvas.displayName = "InfiniteInkCanvas";
-
-const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: "#F4F6F8",
-  },
-  viewport: {
-    flex: 1,
-    overflow: "hidden",
-  },
-  canvasShell: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "flex-start",
-    zIndex: 1,
-  },
-  page: {
-    position: "absolute",
-    left: 0,
-    overflow: "hidden",
-    backgroundColor: "#FFFFFF",
-  },
-  pageLabel: {
-    position: "absolute",
-    top: 12,
-    right: 14,
-    color: "rgba(71, 85, 105, 0.32)",
-    fontSize: 13,
-    fontWeight: "700",
-  },
-  pageBreak: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: "rgba(100, 116, 139, 0.18)",
-    zIndex: 3,
-  },
-});
 
 export default InfiniteInkCanvas;

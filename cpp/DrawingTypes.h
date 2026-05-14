@@ -1,7 +1,5 @@
 #pragma once
 
-#include <algorithm>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -11,7 +9,6 @@
 
 #include <include/core/SkPaint.h>
 #include <include/core/SkPath.h>
-#include <include/core/SkPathUtils.h>
 
 namespace nativedrawing {
 
@@ -56,76 +53,7 @@ struct Stroke {
 
     // Ensure cachedEraserPath is up-to-date with erasedBy circles
     // Builds stroked path matching EraserRenderer::drawEraserCirclesAsStrokes
-    void ensureEraserCacheValid() const {
-        if (erasedBy.size() != cachedEraserCount) {
-            // Always rebuild from scratch to match live eraser rendering exactly
-            cachedEraserPath.reset();
-            cachedEraserCount = 0;
-
-            if (erasedBy.empty()) return;
-
-            // Match EraserRenderer::drawEraserCirclesAsStrokes approach:
-            // Group circles into strokes, create path through centers, stroke with round caps
-            constexpr float STROKE_BREAK_FACTOR = 2.0f;
-            size_t strokeStart = 0;
-
-            for (size_t i = 0; i <= erasedBy.size(); ++i) {
-                bool isLast = (i == erasedBy.size());
-                bool breakStroke = isLast;
-
-                if (!isLast && i > strokeStart) {
-                    float dx = erasedBy[i].x - erasedBy[i-1].x;
-                    float dy = erasedBy[i].y - erasedBy[i-1].y;
-                    float dist = std::sqrt(dx * dx + dy * dy);
-                    float avgRadius = (erasedBy[i].radius + erasedBy[i-1].radius) / 2.0f;
-                    if (dist > avgRadius * STROKE_BREAK_FACTOR) {
-                        breakStroke = true;
-                    }
-                }
-
-                if (breakStroke && i > strokeStart) {
-                    size_t segmentLen = i - strokeStart;
-
-                    if (segmentLen == 1) {
-                        // Single point - just add a circle
-                        cachedEraserPath.addCircle(erasedBy[strokeStart].x,
-                                                    erasedBy[strokeStart].y,
-                                                    erasedBy[strokeStart].radius);
-                    } else {
-                        // Build path through circle centers
-                        SkPath strokePath;
-                        strokePath.moveTo(erasedBy[strokeStart].x, erasedBy[strokeStart].y);
-                        for (size_t j = strokeStart + 1; j < i; ++j) {
-                            strokePath.lineTo(erasedBy[j].x, erasedBy[j].y);
-                        }
-
-                        // Convert stroked path to filled path (matches live eraser exactly)
-                        SkPaint strokePaint;
-                        strokePaint.setStyle(SkPaint::kStroke_Style);
-                        strokePaint.setStrokeWidth(erasedBy[strokeStart].radius * 2.0f);
-                        strokePaint.setStrokeCap(SkPaint::kRound_Cap);
-                        strokePaint.setStrokeJoin(SkPaint::kRound_Join);
-
-                        SkPath filledPath;
-                        if (skpathutils::FillPathWithPaint(strokePath, strokePaint, &filledPath)) {
-                            cachedEraserPath.addPath(filledPath);
-                        } else {
-                            // Fallback: add circles for each point
-                            for (size_t j = strokeStart; j < i; ++j) {
-                                cachedEraserPath.addCircle(erasedBy[j].x,
-                                                            erasedBy[j].y,
-                                                            erasedBy[j].radius);
-                            }
-                        }
-                    }
-
-                    strokeStart = i;
-                }
-            }
-
-            cachedEraserCount = erasedBy.size();
-        }
-    }
+    void ensureEraserCacheValid() const;
 };
 
 // Delta-based history. Each entry describes ONE operation that was

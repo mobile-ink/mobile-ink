@@ -1,4 +1,5 @@
 import React from "react";
+import { StyleSheet } from "react-native";
 import { act, render } from "@testing-library/react-native";
 import {
   ContinuousEnginePool,
@@ -268,6 +269,33 @@ describe("ContinuousEnginePool", () => {
 
     expect(mockLoadBase64Data).toHaveBeenCalledTimes(1);
     expect(mockLoadBase64Data).toHaveBeenCalledWith("data-3");
+  });
+
+  it("keeps pooled slot frames in React layout state", async () => {
+    const pages = [page(0), page(1), page(2)];
+    const { poolRef, view } = renderPool();
+
+    await act(async () => {});
+    await assignPages(poolRef, buildAssignments(pages, 0));
+
+    const firstSlot = view.getByTestId("continuous-engine-pool-slot-0");
+    const secondSlot = view.getByTestId("continuous-engine-pool-slot-1");
+    expect(firstSlot.props.pointerEvents).toBe("auto");
+    expect(StyleSheet.flatten(firstSlot.props.style)).toEqual(
+      expect.objectContaining({ top: 0, height: 800, opacity: 1 }),
+    );
+    expect(secondSlot.props.pointerEvents).toBe("auto");
+    expect(StyleSheet.flatten(secondSlot.props.style)).toEqual(
+      expect.objectContaining({ top: 800, height: 800, opacity: 1 }),
+    );
+
+    await assignPages(poolRef, buildAssignments([pages[0]], 0));
+
+    const hiddenSecondSlot = view.getByTestId("continuous-engine-pool-slot-1");
+    expect(hiddenSecondSlot.props.pointerEvents).toBe("none");
+    expect(StyleSheet.flatten(hiddenSecondSlot.props.style)).toEqual(
+      expect.objectContaining({ top: -100000, height: 800, opacity: 0 }),
+    );
   });
 
   it("forwards pencil double-tap events to every pooled native canvas", async () => {

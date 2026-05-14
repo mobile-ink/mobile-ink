@@ -6,6 +6,7 @@ import React, {
   useImperativeHandle,
   useMemo,
   useRef,
+  useState,
 } from "react";
 import { StyleSheet, View } from "react-native";
 import { NativeInkCanvas } from "../NativeInkCanvas";
@@ -28,6 +29,22 @@ import type {
   PooledCanvasSlotProps,
 } from "./types";
 
+type SlotPointerEvents = "auto" | "none";
+
+type SlotFrame = {
+  top: number;
+  height: number;
+  opacity: number;
+  pointerEvents: SlotPointerEvents;
+};
+
+const hiddenSlotFrame = (height = 0): SlotFrame => ({
+  top: OFFSCREEN_TOP,
+  height,
+  opacity: 0,
+  pointerEvents: "none",
+});
+
 export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCanvasSlotProps>(
   function PooledCanvasSlot({
     poolIndex,
@@ -49,6 +66,7 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
   }, ref) {
     const slotViewRef = useRef<View | null>(null);
     const canvasRef = useRef<NativeCanvasRef | null>(null);
+    const [slotFrame, setSlotFrameState] = useState<SlotFrame>(() => hiddenSlotFrame());
     const lastAttachedCanvasRef = useRef<NativeCanvasRef | null>(null);
     const nativeReadyRef = useRef(false);
     const nativeReadyWaitersRef = useRef<Array<() => void>>([]);
@@ -95,11 +113,21 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
       height: number,
       isVisible: boolean,
     ) => {
+      const nextFrame: SlotFrame = pageIndex === null
+        ? hiddenSlotFrame(height)
+        : {
+            top: pageIndex * height,
+            height,
+            opacity: isVisible ? 1 : 0,
+            pointerEvents: isVisible ? "auto" : "none",
+          };
+
+      setSlotFrameState(nextFrame);
       slotViewRef.current?.setNativeProps({
         style: {
-          top: pageIndex === null ? OFFSCREEN_TOP : pageIndex * height,
-          height,
-          opacity: pageIndex === null || !isVisible ? 0 : 1,
+          top: nextFrame.top,
+          height: nextFrame.height,
+          opacity: nextFrame.opacity,
         },
       });
     }, []);
@@ -509,8 +537,16 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
     return (
       <View
         ref={slotViewRef}
-        style={styles.slot}
-        pointerEvents="auto"
+        style={[
+          styles.slot,
+          {
+            top: slotFrame.top,
+            height: slotFrame.height,
+            opacity: slotFrame.opacity,
+          },
+        ]}
+        pointerEvents={slotFrame.pointerEvents}
+        collapsable={false}
         testID={`continuous-engine-pool-slot-${poolIndex}`}
       >
         <NativeInkCanvas

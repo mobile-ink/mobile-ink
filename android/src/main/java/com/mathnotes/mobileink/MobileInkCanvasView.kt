@@ -90,23 +90,11 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
     }
 
     override fun onSurfaceTextureAvailable(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
-        if (width > 0 && height > 0) {
-            surfaceTexture.setDefaultBufferSize(width, height)
-        }
-        queueEvent {
-            createRenderSurface(surfaceTexture, width, height)
-        }
+        configureAvailableTexture(surfaceTexture, width, height)
     }
 
     override fun onSurfaceTextureSizeChanged(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
-        if (width > 0 && height > 0) {
-            surfaceTexture.setDefaultBufferSize(width, height)
-        }
-        queueEvent {
-            makeRenderContextCurrent()
-            configureSurfaceSize(width, height)
-            renderFrame()
-        }
+        configureAvailableTexture(surfaceTexture, width, height)
     }
 
     override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean {
@@ -118,6 +106,35 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
     }
 
     override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) = Unit
+
+    override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
+        super.onSizeChanged(width, height, oldWidth, oldHeight)
+        val texture = surfaceTexture
+        if (isAvailable && texture != null) {
+            configureAvailableTexture(texture, width, height)
+        }
+    }
+
+    private fun configureAvailableTexture(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
+        if (width <= 0 || height <= 0) {
+            return
+        }
+
+        surfaceTexture.setDefaultBufferSize(width, height)
+        queueEvent {
+            if (
+                !surfaceReady ||
+                eglDisplay == EGL14.EGL_NO_DISPLAY ||
+                eglContext == EGL14.EGL_NO_CONTEXT ||
+                eglSurface == EGL14.EGL_NO_SURFACE
+            ) {
+                createRenderSurface(surfaceTexture, width, height)
+            } else if (makeRenderContextCurrent()) {
+                configureSurfaceSize(width, height)
+                renderFrame()
+            }
+        }
+    }
 
     private fun configureSurfaceSize(width: Int, height: Int) {
         viewWidth = width
@@ -143,6 +160,10 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
     }
 
     private fun createRenderSurface(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
+        if (width <= 0 || height <= 0) {
+            return
+        }
+
         destroyRenderSurface()
 
         renderSurface = Surface(surfaceTexture)
@@ -433,10 +454,7 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
         val currentWidth = width
         val currentHeight = height
         if (!surfaceReady && isAvailable && texture != null && currentWidth > 0 && currentHeight > 0) {
-            texture.setDefaultBufferSize(currentWidth, currentHeight)
-            queueEvent {
-                createRenderSurface(texture, currentWidth, currentHeight)
-            }
+            configureAvailableTexture(texture, currentWidth, currentHeight)
         }
     }
 

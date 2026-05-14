@@ -1,4 +1,5 @@
 #include "DrawingSerialization.h"
+#include "ShapeRecognition.h"
 #include <algorithm>
 #include <cstring>
 #include <cstdio>

@@ -8,7 +8,8 @@
     "ios": "expo run:ios",
     "android": "expo run:android",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "export:ios": "expo export --platform ios --output-dir /tmp/mobile-ink-example-export"
+    "export:ios": "expo export --platform ios --output-dir /tmp/mobile-ink-example-export-ios",
+    "export:android": "expo export --platform android --output-dir /tmp/mobile-ink-example-export-android"
   },
   "dependencies": {
     "@mathnotes/mobile-ink": "file:..",

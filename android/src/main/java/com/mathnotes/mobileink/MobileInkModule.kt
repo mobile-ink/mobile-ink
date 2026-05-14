@@ -8,8 +8,11 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.ReadableArray
+import com.facebook.react.bridge.WritableArray
+import com.facebook.react.bridge.WritableMap
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.module.annotations.ReactModule
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.lang.ref.WeakReference
@@ -65,6 +68,19 @@ class MobileInkModule(private val reactContext: ReactApplicationContext) :
             height: Int,
             scale: Float
         ): Array<String?>
+
+        @JvmStatic
+        private external fun nativeComposeContinuousWindow(
+            pageDataArray: Array<ByteArray?>,
+            pageHeight: Float
+        ): ByteArray?
+
+        @JvmStatic
+        private external fun nativeDecomposeContinuousWindow(
+            windowData: ByteArray?,
+            pageCount: Int,
+            pageHeight: Float
+        ): Array<ByteArray?>
     }
 
     override fun getName() = NAME
@@ -249,16 +265,14 @@ class MobileInkModule(private val reactContext: ReactApplicationContext) :
                 val json = JSONObject(jsonString)
                 val pages = json.optJSONObject("pages")
                 if (pages == null) {
-                    view.clear()
-                    promise.resolve(true)
+                    promise.resolve(view.clearCanvasForLoad())
                     return@runOnUiQueueThread
                 }
 
                 // Get page 0 data (current page)
                 val base64 = pages.optString("0", "")
                 if (base64.isEmpty()) {
-                    view.clear()
-                    promise.resolve(true)
+                    promise.resolve(view.clearCanvasForLoad())
                     return@runOnUiQueueThread
                 }
 
@@ -374,15 +388,13 @@ class MobileInkModule(private val reactContext: ReactApplicationContext) :
                     val json = JSONObject(body)
                     val pages = json.optJSONObject("pages")
                     if (pages == null) {
-                        view.clear()
-                        promise.resolve(true)
+                        promise.resolve(view.clearCanvasForLoad())
                         return@runOnUiQueueThread
                     }
 
                     val base64 = pages.optString("0", "")
                     if (base64.isEmpty()) {
-                        view.clear()
-                        promise.resolve(true)
+                        promise.resolve(view.clearCanvasForLoad())
                         return@runOnUiQueueThread
                     }
 
@@ -455,7 +467,7 @@ class MobileInkModule(private val reactContext: ReactApplicationContext) :
                         null
                     } else {
                         val pageAwareUri = pdfUriForPage(pdfBackgroundUri, resolvedPageIndices[i], numPages)
-                        PdfLoader.loadAndRenderPdf(reactApplicationContext, pageAwareUri, width)
+                        PdfLoader.loadAndRenderPdf(reactApplicationContext, pageAwareUri, width, height)
                     }
                 }
 
@@ -486,12 +498,92 @@ class MobileInkModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    /**
+     * Native body-file read + parse. Mirrors the iOS helper so Android callers
+     * can skip a multi-MB JS string read/JSON.parse when opening large notebooks.
+     */
+    @ReactMethod
+    fun readBodyFileParsed(bodyPath: String, promise: Promise) {
+        executor.execute {
+            val target = fileFromBridgePath(bodyPath)
+            if (!target.exists() || target.length() == 0L) {
+                promise.resolve(null)
+                return@execute
+            }
+
+            try {
+                val parsed = JSONObject(target.readText())
+                promise.resolve(jsonObjectToWritableMap(parsed))
+            } catch (e: Exception) {
+                android.util.Log.e("MobileInkModule", "readBodyFileParsed: exception", e)
+                promise.reject("READ_PARSE_FAILED", e.message ?: "read/parse failed", e)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun composeContinuousWindow(pagePayloads: ReadableArray, pageHeight: Double, promise: Promise) {
+        if (!MobileInkCanvasView.ensureLibraryLoaded()) {
+            promise.reject("LIBRARY_NOT_LOADED", "Failed to load native drawing library")
+            return
+        }
+
+        executor.execute {
+            try {
+                val pageData = Array<ByteArray?>(pagePayloads.size()) { i ->
+                    decodePagePayload(pagePayloads.getString(i) ?: "")
+                }
+                val combinedData = nativeComposeContinuousWindow(pageData, pageHeight.toFloat())
+                promise.resolve(makePagePayload(combinedData))
+            } catch (e: Exception) {
+                android.util.Log.e("MobileInkModule", "composeContinuousWindow: exception", e)
+                promise.reject("COMPOSE_FAILED", e.message ?: "compose failed", e)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun decomposeContinuousWindow(
+        windowPayload: String,
+        pageCount: Int,
+        pageHeight: Double,
+        promise: Promise
+    ) {
+        if (!MobileInkCanvasView.ensureLibraryLoaded()) {
+            promise.reject("LIBRARY_NOT_LOADED", "Failed to load native drawing library")
+            return
+        }
+
+        executor.execute {
+            try {
+                val windowData = decodePagePayload(windowPayload)
+                val pageData = nativeDecomposeContinuousWindow(windowData, pageCount, pageHeight.toFloat())
+                val result = Arguments.createArray()
+                for (i in 0 until pageCount) {
+                    result.pushString(makePagePayload(pageData.getOrNull(i)))
+                }
+                promise.resolve(result)
+            } catch (e: Exception) {
+                android.util.Log.e("MobileInkModule", "decomposeContinuousWindow: exception", e)
+                promise.reject("DECOMPOSE_FAILED", e.message ?: "decompose failed", e)
+            }
+        }
+    }
+
     private fun pdfUriForPage(pdfBackgroundUri: String, pageIndex: Int, exportedPageCount: Int): String {
         if (exportedPageCount == 1 && pdfBackgroundUri.contains("#page=")) {
             return pdfBackgroundUri
         }
         val cleanUri = pdfBackgroundUri.substringBefore("#")
         return "$cleanUri#page=${pageIndex + 1}"
+    }
+
+    private fun makePagePayload(data: ByteArray?): String {
+        if (data == null || data.isEmpty()) {
+            return """{"pages":{}}"""
+        }
+        val base64 = Base64.encodeToString(data, Base64.NO_WRAP)
+        return """{"pages":{"0":"$base64"}}"""
     }
 
     private fun decodePagePayload(pageJson: String): ByteArray? {
@@ -507,6 +599,58 @@ class MobileInkModule(private val reactContext: ReactApplicationContext) :
         } catch (e: Exception) {
             android.util.Log.w("MobileInkModule", "decodePagePayload: treating invalid page payload as blank")
             null
+        }
+    }
+
+    private fun jsonObjectToWritableMap(json: JSONObject): WritableMap {
+        val map = Arguments.createMap()
+        val keys = json.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            putJsonValue(map, key, json.opt(key))
+        }
+        return map
+    }
+
+    private fun jsonArrayToWritableArray(json: JSONArray): WritableArray {
+        val array = Arguments.createArray()
+        for (i in 0 until json.length()) {
+            when (val value = json.opt(i)) {
+                null, JSONObject.NULL -> array.pushNull()
+                is JSONObject -> array.pushMap(jsonObjectToWritableMap(value))
+                is JSONArray -> array.pushArray(jsonArrayToWritableArray(value))
+                is Boolean -> array.pushBoolean(value)
+                is Int -> array.pushInt(value)
+                is Long -> {
+                    if (value >= Int.MIN_VALUE && value <= Int.MAX_VALUE) {
+                        array.pushInt(value.toInt())
+                    } else {
+                        array.pushDouble(value.toDouble())
+                    }
+                }
+                is Number -> array.pushDouble(value.toDouble())
+                else -> array.pushString(value.toString())
+            }
+        }
+        return array
+    }
+
+    private fun putJsonValue(map: WritableMap, key: String, value: Any?) {
+        when (value) {
+            null, JSONObject.NULL -> map.putNull(key)
+            is JSONObject -> map.putMap(key, jsonObjectToWritableMap(value))
+            is JSONArray -> map.putArray(key, jsonArrayToWritableArray(value))
+            is Boolean -> map.putBoolean(key, value)
+            is Int -> map.putInt(key, value)
+            is Long -> {
+                if (value >= Int.MIN_VALUE && value <= Int.MAX_VALUE) {
+                    map.putInt(key, value.toInt())
+                } else {
+                    map.putDouble(key, value.toDouble())
+                }
+            }
+            is Number -> map.putDouble(key, value.toDouble())
+            else -> map.putString(key, value.toString())
         }
     }
 }

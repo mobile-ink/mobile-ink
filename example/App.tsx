@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
+  Platform,
   SafeAreaView,
   StyleSheet,
   Switch,
@@ -23,6 +24,8 @@ import { BenchmarkScreen } from "./BenchmarkScreen";
 type AppMode = "draw" | "benchmark";
 
 const STORAGE_KEY = "mobile-ink-example-notebook";
+const supportsNativeBenchmark = Platform.OS === "ios";
+const supportsRenderBackendToggle = Platform.OS === "ios";
 
 export default function App() {
   const canvasRef = useRef<InfiniteInkCanvasRef | null>(null);
@@ -85,7 +88,7 @@ export default function App() {
     <SafeAreaView style={styles.screen}>
       <View style={styles.toolbar}>
         <View style={styles.segmentGroup}>
-          {(["draw", "benchmark"] as AppMode[]).map((item) => (
+          {((supportsNativeBenchmark ? ["draw", "benchmark"] : ["draw"]) as AppMode[]).map((item) => (
             <TouchableOpacity
               key={item}
               style={[styles.button, mode === item && styles.activeButton]}
@@ -98,17 +101,19 @@ export default function App() {
 
         {mode === "draw" ? (
           <>
-            <View style={styles.segmentGroup}>
-              {(["ganesh", "cpu"] as NativeInkRenderBackend[]).map((item) => (
-                <TouchableOpacity
-                  key={item}
-                  style={[styles.button, renderBackend === item && styles.activeButton]}
-                  onPress={() => setRenderBackend(item)}
-                >
-                  <Text style={styles.buttonText}>{item === "ganesh" ? "Ganesh" : "CPU"}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+            {supportsRenderBackendToggle ? (
+              <View style={styles.segmentGroup}>
+                {(["ganesh", "cpu"] as NativeInkRenderBackend[]).map((item) => (
+                  <TouchableOpacity
+                    key={item}
+                    style={[styles.button, renderBackend === item && styles.activeButton]}
+                    onPress={() => setRenderBackend(item)}
+                  >
+                    <Text style={styles.buttonText}>{item === "ganesh" ? "Ganesh" : "CPU"}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : null}
 
             <View style={styles.toggleRow}>
               <Text style={styles.toggleLabel}>Draw with finger</Text>
@@ -152,7 +157,9 @@ export default function App() {
           <Text style={styles.statusText}>Page {currentPageIndex + 1} / {pageCount}</Text>
           <Text style={styles.statusText}>{isMoving ? "moving" : "settled"}</Text>
           <Text style={styles.statusText}>{storageStatus}</Text>
-          <Text style={styles.statusText}>Backend {renderBackend}</Text>
+          {supportsRenderBackendToggle ? (
+            <Text style={styles.statusText}>Backend {renderBackend}</Text>
+          ) : null}
         </View>
       ) : null}
 

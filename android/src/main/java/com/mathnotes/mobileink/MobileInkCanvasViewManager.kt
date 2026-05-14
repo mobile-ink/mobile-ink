@@ -29,8 +29,8 @@ class MobileInkCanvasViewManager(private val reactContext: ReactApplicationConte
             "onDrawingBegin" to mapOf(
                 "phasedRegistrationNames" to mapOf("bubbled" to "onDrawingBegin")
             ),
-            "onSelectionChange" to mapOf(
-                "phasedRegistrationNames" to mapOf("bubbled" to "onSelectionChange")
+            "onInkSelectionChange" to mapOf(
+                "phasedRegistrationNames" to mapOf("bubbled" to "onInkSelectionChange")
             )
         )
     }
@@ -65,6 +65,21 @@ class MobileInkCanvasViewManager(private val reactContext: ReactApplicationConte
         view.renderBackend = backend ?: "ganesh"
     }
 
+    private fun parseToolColor(colorHex: String): Int {
+        val trimmed = colorHex.trim()
+        val hex = trimmed.removePrefix("#")
+        if (hex.length == 8 && hex.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
+            val value = hex.toLong(16)
+            val red = ((value shr 24) and 0xFF).toInt()
+            val green = ((value shr 16) and 0xFF).toInt()
+            val blue = ((value shr 8) and 0xFF).toInt()
+            val alpha = (value and 0xFF).toInt()
+            return Color.argb(alpha, red, green, blue)
+        }
+
+        return Color.parseColor(trimmed)
+    }
+
     override fun receiveCommand(
         root: MobileInkCanvasView,
         commandId: String,
@@ -79,7 +94,7 @@ class MobileInkCanvasViewManager(private val reactContext: ReactApplicationConte
                     val toolType = args.getString(0) ?: "pen"
                     val width = args.getDouble(1).toFloat()
                     val colorHex = args.getString(2) ?: "#000000"
-                    val color = Color.parseColor(colorHex)
+                    val color = parseToolColor(colorHex)
                     root.setTool(toolType, width, color)
                 }
             }
@@ -88,7 +103,7 @@ class MobileInkCanvasViewManager(private val reactContext: ReactApplicationConte
                     val toolType = args.getString(0) ?: "pen"
                     val width = args.getDouble(1).toFloat()
                     val colorHex = args.getString(2) ?: "#000000"
-                    val color = Color.parseColor(colorHex)
+                    val color = parseToolColor(colorHex)
                     val eraserMode = if (args.size() > 3) args.getString(3) else null
                     root.setToolWithParams(toolType, width, color, eraserMode)
                 }
@@ -105,7 +120,7 @@ class MobileInkCanvasViewManager(private val reactContext: ReactApplicationConte
             "copySelection" -> root.copySelection()
             // Aliases used by JS side
             "performCopy" -> root.copySelection()
-            "performPaste" -> root.pasteSelection(20f, 20f) // Default offset for paste
+            "performPaste" -> root.pasteSelection(50f, 50f)
             "performDelete" -> root.deleteSelection()
             "pasteSelection" -> {
                 if (args != null && args.size() >= 2) {
@@ -138,20 +153,20 @@ class MobileInkCanvasViewManager(private val reactContext: ReactApplicationConte
                                 root.deserializeDrawing(data)
                             } else {
                                 // Match iOS: clear canvas when no data for page 0
-                                root.clear()
+                                root.clearCanvasAsyncForLoad()
                             }
                         } catch (e: Exception) {
                             // Clear on parse error to prevent stale data (match iOS behavior)
-                            root.clear()
+                            root.clearCanvasAsyncForLoad()
                             android.util.Log.e("MobileInkCanvasViewManager", "Failed to deserialize drawing", e)
                         }
                     } else {
                         // Clear when jsonString is null
-                        root.clear()
+                        root.clearCanvasAsyncForLoad()
                     }
                 } else {
                     // Clear when no args provided
-                    root.clear()
+                    root.clearCanvasAsyncForLoad()
                 }
             }
         }

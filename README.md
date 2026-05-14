@@ -132,6 +132,8 @@ export function Notebook() {
 
 The `example/` folder is an Expo dev-client app that exercises the reusable canvas stack, not a MathNotes screen. It demos the full continuous canvas path: pencil drawing with finger navigation by default, optional draw-with-finger mode, pinch zoom, momentum scroll, engine-pool page assignment, MathNotes-style one-page trailing blank growth, tools, selection, and local save/reload on a blank page background.
 
+Expo Go cannot run the example because this package includes native Kotlin, C++, and iOS code. Use a dev-client build:
+
 ```sh
 cd example
 npm install
@@ -143,6 +145,21 @@ For a simulator:
 ```sh
 npx expo run:ios
 ```
+
+For Android:
+
+```sh
+npx expo run:android
+```
+
+The first Android build compiles the shared C++ drawing engine and can take a while. If the generated native project is stale after Android native changes, run:
+
+```sh
+npx expo prebuild --platform android --clean
+npx expo run:android
+```
+
+The Android example runs the drawing canvas path. The benchmark screen and CPU/Ganesh backend toggle are currently iOS-only. See [example/README.md](example/README.md) for Android prerequisites, Metro/dev-client commands, and smoke checks.
 
 ## Documentation
 
@@ -173,6 +190,7 @@ npm pack --dry-run --ignore-scripts
 npm ci --prefix example
 npm run test:example:typecheck
 npm run test:example:export:ios
+npm run test:example:export:android
 ```
 
 `npm run build` creates `lib/` for npm packaging. The React Native entry still points at `src/index.ts` so Metro can transform worklet directives with the consuming app's Babel config.

@@ -14,22 +14,32 @@ import com.facebook.react.uimanager.events.RCTEventEmitter
 
 class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEngineHost {
 
+    private val perpendicularAltitude: Float = Math.PI.toFloat() / 2f
+    private val minimumStylusPressure: Float = 0.015f
+    private val stylusPressureExponent: Float = 0.88f
+
     private var drawingEngine: Long = 0
     private val renderer: DrawingRenderer
     private var viewWidth: Int = 0
     private var viewHeight: Int = 0
+    private var engineWidth: Int = 0
+    private var engineHeight: Int = 0
     private var nativeLibraryAvailable: Boolean = false
 
     // Tool state tracking
     private var currentToolType: String = "pen"
     private var currentEraserMode: String = "pixel"
     private var currentStrokeWidth: Float = 3f
+    private var currentStrokeColor: Int = android.graphics.Color.BLACK
     private val holdToShapeDelayMs: Long = 300
     private val holdToShapeHandler = Handler(Looper.getMainLooper())
     private val holdToShapeRunnable = Runnable { showHoldToShapePreview() }
 
     // Selection move state
     private var isMovingSelection: Boolean = false
+    private var isTransformingSelection: Boolean = false
+    private var hasSelectionMoveDelta: Boolean = false
+    private var selectionTransformHandleIndex: Int = -1
     private var lastDragX: Float = 0f
     private var lastDragY: Float = 0f
 
@@ -75,23 +85,55 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
         viewWidth = width
         viewHeight = height
 
-        // Create or recreate drawing engine
-        if (drawingEngine != 0L) {
-            resizeEngine(drawingEngine, width, height)
-        } else {
-            drawingEngine = createDrawingEngine(width, height)
+        if (width <= 0 || height <= 0) {
+            return
         }
 
-        // Re-apply background type to engine (in case it was set before engine was created,
-        // or engine was recreated). Always apply to ensure consistency.
-        if (drawingEngine != 0L) {
-            setBackgroundType(drawingEngine, currentBackgroundType)
+        val shouldPreserveDrawing = drawingEngine != 0L
+        if (drawingEngine == 0L || engineWidth != width || engineHeight != height) {
+            configureDrawingEngine(width, height, shouldPreserveDrawing)
         }
 
         // Re-apply PDF background if we have one (needs to be re-rendered at new size)
         if (!currentPdfBackgroundUri.isNullOrEmpty()) {
             setPdfBackgroundUri(currentPdfBackgroundUri)
         }
+    }
+
+    private fun configureDrawingEngine(width: Int, height: Int, preserveExistingDrawing: Boolean) {
+        val preservedDrawing = if (preserveExistingDrawing && drawingEngine != 0L) {
+            try {
+                serializeDrawing(drawingEngine)
+            } catch (e: Exception) {
+                android.util.Log.e("MobileInkCanvasView", "Failed to preserve drawing while resizing", e)
+                null
+            }
+        } else {
+            null
+        }
+
+        if (drawingEngine != 0L) {
+            destroyDrawingEngine(drawingEngine)
+            drawingEngine = 0
+        }
+
+        drawingEngine = createDrawingEngine(width, height)
+        engineWidth = width
+        engineHeight = height
+
+        if (drawingEngine == 0L) {
+            return
+        }
+
+        setBackgroundType(drawingEngine, currentBackgroundType)
+        applyCurrentToolToEngine(drawingEngine)
+
+        if (preservedDrawing != null && preservedDrawing.isNotEmpty()) {
+            deserializeDrawing(drawingEngine, preservedDrawing)
+        }
+
+        resetTransientInteractionState()
+        post { emitSelectionChange() }
     }
 
     override fun renderEngineToPixels(engine: Long, bitmap: Bitmap) {
@@ -132,7 +174,7 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
 
         // Load PDF and render to bitmap on background thread
         Thread {
-            val pdfBitmap = PdfLoader.loadAndRenderPdf(context, uri, viewWidth)
+            val pdfBitmap = PdfLoader.loadAndRenderPdf(context, uri, viewWidth, viewHeight)
             if (pdfBitmap != null) {
                 queueEvent {
                     if (drawingEngine != 0L) {
@@ -231,6 +273,128 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
         requestInkRender()
     }
 
+    private fun normalizedPressure(rawPressure: Float, isStylusInput: Boolean): Float {
+        val clamped = if (rawPressure.isFinite()) rawPressure.coerceIn(0f, 1f) else 1f
+        return if (isStylusInput) {
+            maxOf(minimumStylusPressure, Math.pow(clamped.toDouble(), stylusPressureExponent.toDouble()).toFloat())
+        } else {
+            maxOf(0.1f, clamped)
+        }
+    }
+
+    private fun normalizedAltitudeFromTilt(rawTilt: Float, isStylusInput: Boolean): Float {
+        if (!isStylusInput) {
+            return perpendicularAltitude
+        }
+        val altitude = perpendicularAltitude - rawTilt
+        return if (altitude.isFinite()) altitude.coerceIn(0f, perpendicularAltitude) else perpendicularAltitude
+    }
+
+    private fun selectionBoundsContain(x: Float, y: Float, bounds: FloatArray, padding: Float): Boolean {
+        return x >= bounds[0] - padding &&
+            x <= bounds[2] + padding &&
+            y >= bounds[1] - padding &&
+            y <= bounds[3] + padding
+    }
+
+    private fun selectionHandleHitTest(x: Float, y: Float, bounds: FloatArray): Int? {
+        if (bounds.size != 4 || bounds[2] <= bounds[0] || bounds[3] <= bounds[1]) {
+            return null
+        }
+
+        val centerX = (bounds[0] + bounds[2]) * 0.5f
+        val centerY = (bounds[1] + bounds[3]) * 0.5f
+        val handles = arrayOf(
+            0 to floatArrayOf(bounds[0], bounds[1]),
+            1 to floatArrayOf(centerX, bounds[1]),
+            2 to floatArrayOf(bounds[2], bounds[1]),
+            3 to floatArrayOf(bounds[0], centerY),
+            4 to floatArrayOf(bounds[2], centerY),
+            5 to floatArrayOf(bounds[0], bounds[3]),
+            6 to floatArrayOf(centerX, bounds[3]),
+            7 to floatArrayOf(bounds[2], bounds[3])
+        )
+        val hitRadius = 28f * resources.displayMetrics.density
+        val hitRadiusSquared = hitRadius * hitRadius
+
+        for ((handleIndex, point) in handles) {
+            val dx = x - point[0]
+            val dy = y - point[1]
+            if (dx * dx + dy * dy <= hitRadiusSquared) {
+                return handleIndex
+            }
+        }
+        return null
+    }
+
+    private fun handleFingerSelectionTouch(x: Float, y: Float): Boolean {
+        if (currentToolType == "text" || drawingEngine == 0L) {
+            return false
+        }
+
+        cancelHoldToShapePreview()
+        showEraserCursor = false
+
+        val selectionCount = getSelectionCount()
+        val bounds = if (selectionCount > 0) getSelectionBounds() else null
+        if (bounds != null) {
+            val handleIndex = selectionHandleHitTest(x, y, bounds)
+            if (handleIndex != null) {
+                queueEvent {
+                    if (drawingEngine != 0L) {
+                        beginSelectionTransform(drawingEngine, handleIndex)
+                    }
+                }
+                isTransformingSelection = true
+                selectionTransformHandleIndex = handleIndex
+                hasSelectionMoveDelta = false
+                lastDragX = x
+                lastDragY = y
+                requestInkRender()
+                return true
+            }
+
+            if (selectionBoundsContain(x, y, bounds, 24f * resources.displayMetrics.density)) {
+                isMovingSelection = true
+                hasSelectionMoveDelta = false
+                lastDragX = x
+                lastDragY = y
+                requestInkRender()
+                return true
+            }
+        }
+
+        val hadSelection = selectionCount > 0
+        val selectedShape = runOnGlThreadSync {
+            if (drawingEngine != 0L) {
+                if (hadSelection) {
+                    clearSelection(drawingEngine)
+                }
+                selectShapeStrokeAt(drawingEngine, x, y)
+            } else {
+                false
+            }
+        } ?: false
+
+        if (selectedShape) {
+            isMovingSelection = true
+            hasSelectionMoveDelta = false
+            lastDragX = x
+            lastDragY = y
+            requestInkRender()
+            emitSelectionChange()
+            return true
+        }
+
+        if (hadSelection) {
+            requestInkRender()
+            emitSelectionChange()
+            return true
+        }
+
+        return false
+    }
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (!nativeLibraryAvailable) {
             android.util.Log.e("MobileInkCanvasView", "onTouchEvent: native library not available")
@@ -241,10 +405,22 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
             return false
         }
 
+        val x = event.x
+        val y = event.y
         val toolType = event.getToolType(0)
-        val isFingerInput = toolType == MotionEvent.TOOL_TYPE_FINGER
-        val isSelectionInteraction = currentToolType == "select" || isMovingSelection
-        if (drawingPolicy == "pencilonly" && isFingerInput && !isSelectionInteraction) {
+        val isStylusInput = toolType == MotionEvent.TOOL_TYPE_STYLUS ||
+            toolType == MotionEvent.TOOL_TYPE_ERASER
+
+        if (event.actionMasked == MotionEvent.ACTION_DOWN &&
+            !isStylusInput &&
+            handleFingerSelectionTouch(x, y)
+        ) {
+            parent?.requestDisallowInterceptTouchEvent(true)
+            return true
+        }
+
+        val isSelectionInteraction = currentToolType == "select" || isMovingSelection || isTransformingSelection
+        if (drawingPolicy == "pencilonly" && !isStylusInput && !isSelectionInteraction) {
             return false
         }
 
@@ -253,34 +429,28 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
         // will intercept ACTION_MOVE events, causing only dots to appear
         parent?.requestDisallowInterceptTouchEvent(true)
 
-        val x = event.x
-        val y = event.y
-
-        // Extract stylus data - pressure, tilt, and orientation
-        val pressure = event.pressure.coerceIn(0f, 1f)
+        val pressure = normalizedPressure(event.pressure, isStylusInput)
 
         // Get stylus tilt (altitude) - AXIS_TILT is tilt angle from perpendicular
         // 0 = perpendicular to screen, pi/2 = parallel to screen
         val tilt = event.getAxisValue(MotionEvent.AXIS_TILT)
-        // Convert to altitude (perpendicular = pi/2, parallel = 0)
-        val altitude = (Math.PI.toFloat() / 2f) - tilt
+        val altitude = normalizedAltitudeFromTilt(tilt, isStylusInput)
 
         // Get stylus orientation (azimuth) - angle around the perpendicular axis
-        val azimuth = event.getAxisValue(MotionEvent.AXIS_ORIENTATION)
-        val isStylusInput = toolType == MotionEvent.TOOL_TYPE_STYLUS ||
-            toolType == MotionEvent.TOOL_TYPE_ERASER
+        val azimuth = if (isStylusInput) event.getAxisValue(MotionEvent.AXIS_ORIENTATION) else 0f
         val eventTimestamp = event.eventTime
 
-        when (event.action) {
+        when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 // For select tool, check if tapping inside existing selection to move it
                 if (currentToolType == "select" && drawingEngine != 0L) {
-                    val selectionCount = getSelectionCount(drawingEngine)
+                    val selectionCount = getSelectionCount()
                     if (selectionCount > 0) {
-                        val bounds = getSelectionBounds(drawingEngine)
+                        val bounds = getSelectionBounds()
                         if (bounds != null && isPointInBounds(x, y, bounds)) {
                             // Start moving the selection
                             isMovingSelection = true
+                            hasSelectionMoveDelta = false
                             lastDragX = x
                             lastDragY = y
                             cancelHoldToShapePreview()
@@ -311,20 +481,41 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
                 sendDrawingBeginEvent(x, y)
             }
             MotionEvent.ACTION_MOVE -> {
-                // Handle selection move
-                if (isMovingSelection && drawingEngine != 0L) {
+                if (isTransformingSelection && drawingEngine != 0L) {
                     cancelHoldToShapePreview()
-                    val dx = x - lastDragX
-                    val dy = y - lastDragY
+                    val moved = x != lastDragX || y != lastDragY
+                    if (moved) {
+                        hasSelectionMoveDelta = true
+                    }
                     queueEvent {
                         if (drawingEngine != 0L) {
-                            moveSelection(drawingEngine, dx, dy)
+                            updateSelectionTransform(drawingEngine, x, y)
+                            post { emitSelectionChange() }
                         }
                     }
                     lastDragX = x
                     lastDragY = y
                     requestInkRender()
-                    emitSelectionChange()
+                    return true
+                }
+
+                // Handle selection move
+                if (isMovingSelection && drawingEngine != 0L) {
+                    cancelHoldToShapePreview()
+                    val dx = x - lastDragX
+                    val dy = y - lastDragY
+                    if (dx != 0f || dy != 0f) {
+                        hasSelectionMoveDelta = true
+                        queueEvent {
+                            if (drawingEngine != 0L) {
+                                moveSelection(drawingEngine, dx, dy)
+                                post { emitSelectionChange() }
+                            }
+                        }
+                    }
+                    lastDragX = x
+                    lastDragY = y
+                    requestInkRender()
                     return true
                 }
 
@@ -334,19 +525,31 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
                     eraserCursorY = y
                 }
 
+                // Pixel eraser interpolates between samples in C++ and scans
+                // existing strokes per sample, so replaying Android history here
+                // multiplies the expensive work without improving coverage.
+                val shouldProcessHistoricalPoints =
+                    currentToolType != "eraser" || currentEraserMode != "pixel"
+
                 // Collect historical points for batch processing
                 val historySize = event.historySize
                 val historicalPoints = mutableListOf<FloatArray>()
                 val historicalTimestamps = mutableListOf<Long>()
-                for (i in 0 until historySize) {
-                    val hx = event.getHistoricalX(i)
-                    val hy = event.getHistoricalY(i)
-                    val hp = event.getHistoricalPressure(i).coerceIn(0f, 1f)
-                    val hTilt = event.getHistoricalAxisValue(MotionEvent.AXIS_TILT, i)
-                    val hAltitude = (Math.PI.toFloat() / 2f) - hTilt
-                    val hAzimuth = event.getHistoricalAxisValue(MotionEvent.AXIS_ORIENTATION, i)
-                    historicalPoints.add(floatArrayOf(hx, hy, hp, hAzimuth, hAltitude))
-                    historicalTimestamps.add(event.getHistoricalEventTime(i))
+                if (shouldProcessHistoricalPoints) {
+                    for (i in 0 until historySize) {
+                        val hx = event.getHistoricalX(i)
+                        val hy = event.getHistoricalY(i)
+                        val hp = normalizedPressure(event.getHistoricalPressure(i), isStylusInput)
+                        val hTilt = event.getHistoricalAxisValue(MotionEvent.AXIS_TILT, i)
+                        val hAltitude = normalizedAltitudeFromTilt(hTilt, isStylusInput)
+                        val hAzimuth = if (isStylusInput) {
+                            event.getHistoricalAxisValue(MotionEvent.AXIS_ORIENTATION, i)
+                        } else {
+                            0f
+                        }
+                        historicalPoints.add(floatArrayOf(hx, hy, hp, hAzimuth, hAltitude))
+                        historicalTimestamps.add(event.getHistoricalEventTime(i))
+                    }
                 }
 
                 // Queue all touch moves to GL thread
@@ -378,18 +581,49 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 cancelHoldToShapePreview()
+                val isCancel = event.actionMasked == MotionEvent.ACTION_CANCEL
+
+                if (isTransformingSelection && drawingEngine != 0L) {
+                    val didTransformSelection = hasSelectionMoveDelta && !isCancel
+                    queueEvent {
+                        if (drawingEngine != 0L) {
+                            if (didTransformSelection) {
+                                finalizeSelectionTransform(drawingEngine)
+                            } else {
+                                cancelSelectionTransform(drawingEngine)
+                            }
+                            post { emitSelectionChange() }
+                        }
+                    }
+                    isTransformingSelection = false
+                    selectionTransformHandleIndex = -1
+                    hasSelectionMoveDelta = false
+                    requestInkRender()
+                    if (didTransformSelection) {
+                        sendEvent("onDrawingChange", Arguments.createMap())
+                    }
+                    return true
+                }
 
                 // Finalize selection move
                 if (isMovingSelection && drawingEngine != 0L) {
-                    queueEvent {
-                        if (drawingEngine != 0L) {
-                            finalizeMove(drawingEngine)
+                    val didMoveSelection = hasSelectionMoveDelta && !isCancel
+                    if (didMoveSelection) {
+                        queueEvent {
+                            if (drawingEngine != 0L) {
+                                finalizeMove(drawingEngine)
+                                post { emitSelectionChange() }
+                            }
                         }
+                    } else {
                         post { emitSelectionChange() }
                     }
                     isMovingSelection = false
+                    hasSelectionMoveDelta = false
                     requestInkRender()
-                    sendEvent("onDrawingChange", Arguments.createMap())
+                    if (didMoveSelection) {
+                        sendEvent("onDrawingChange", Arguments.createMap())
+                    }
                     return true
                 }
 
@@ -400,7 +634,7 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
                 queueEvent {
                     if (drawingEngine != 0L) {
                         setEraserCursor(drawingEngine, 0f, 0f, 0f, false)
-                        touchEnded(drawingEngine, eventTimestamp)
+                        touchEnded(drawingEngine, if (isCancel) 0L else eventTimestamp)
                     }
                     if (currentToolType == "select") {
                         post { emitSelectionChange() }
@@ -417,6 +651,30 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
     }
 
     fun clear() {
+        clearCanvasForLoad()
+        sendEvent("onDrawingChange", Arguments.createMap())
+    }
+
+    fun clearCanvasForLoad(): Boolean {
+        val success = runOnGlThreadSync {
+            if (drawingEngine != 0L) {
+                clearCanvas(drawingEngine)
+                true
+            } else {
+                false
+            }
+        } ?: false
+
+        if (success) {
+            resetTransientInteractionState()
+            requestInkRender()
+            emitSelectionChange()
+        }
+
+        return success
+    }
+
+    fun clearCanvasAsyncForLoad() {
         queueEvent {
             if (drawingEngine != 0L) {
                 clearCanvas(drawingEngine)
@@ -424,7 +682,6 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
             }
         }
         requestInkRender()
-        sendEvent("onDrawingChange", Arguments.createMap())
     }
 
     fun undo() {
@@ -450,23 +707,34 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
     }
 
     fun setTool(toolType: String, width: Float, color: Int) {
+        cancelHoldToShapePreview()
+        currentToolType = toolType
+        currentEraserMode = "pixel"
+        currentStrokeWidth = width
+        currentStrokeColor = color
+        resetTransientInteractionState()
+
         queueEvent {
             if (drawingEngine != 0L) {
-                setStrokeWidth(drawingEngine, width)
-                setStrokeColor(drawingEngine, color)
-                setTool(drawingEngine, toolType)
+                if (toolType != "select") {
+                    clearSelection(drawingEngine)
+                    post { emitSelectionChange() }
+                }
+                applyCurrentToolToEngine(drawingEngine)
             }
         }
+        requestInkRender()
     }
 
     fun setToolWithParams(toolType: String, width: Float, color: Int, eraserMode: String?) {
         cancelHoldToShapePreview()
-        val wasSelectionMode = currentToolType == "select"
 
         // Update tool state (local - doesn't need queuing)
         currentToolType = toolType
         currentEraserMode = eraserMode ?: "pixel"
         currentStrokeWidth = width
+        currentStrokeColor = color
+        resetTransientInteractionState()
 
         // Hide eraser cursor if switching away from pixel eraser
         if (toolType != "eraser" || eraserMode != "pixel") {
@@ -477,16 +745,33 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
         queueEvent {
             if (drawingEngine != 0L) {
                 // Clear selection when switching away from select tool
-                if (wasSelectionMode && toolType != "select") {
+                if (toolType != "select") {
                     clearSelection(drawingEngine)
                     post { emitSelectionChange() }
                 }
-                setToolWithParams(drawingEngine, toolType, width, color, eraserMode ?: "")
+                applyCurrentToolToEngine(drawingEngine)
             }
         }
-        if (wasSelectionMode && toolType != "select") {
-            requestInkRender()
-        }
+        requestInkRender()
+    }
+
+    private fun applyCurrentToolToEngine(engine: Long) {
+        setToolWithParams(
+            engine,
+            currentToolType,
+            currentStrokeWidth,
+            currentStrokeColor,
+            currentEraserMode
+        )
+    }
+
+    private fun resetTransientInteractionState() {
+        isMovingSelection = false
+        isTransformingSelection = false
+        hasSelectionMoveDelta = false
+        selectionTransformHandleIndex = -1
+        lastDragX = 0f
+        lastDragY = 0f
     }
 
     // Helper to check if a point is inside selection bounds
@@ -501,15 +786,15 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
     }
 
     // Selection operations
-    // Note: selectAt needs to return synchronously, so we can't easily queue it
-    // It only reads data, doesn't modify, so should be safe
     fun selectAt(x: Float, y: Float): Boolean {
-        return if (drawingEngine != 0L) {
-            val result = selectStrokeAt(drawingEngine, x, y)
+        val result = runOnGlThreadSync {
+            if (drawingEngine != 0L) selectStrokeAt(drawingEngine, x, y) else false
+        } ?: false
+        if (result) {
             requestInkRender()
             emitSelectionChange()
-            result
-        } else false
+        }
+        return result
     }
 
     fun clearSelection() {
@@ -530,6 +815,7 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
             }
         }
         requestInkRender()
+        sendEvent("onDrawingChange", Arguments.createMap())
     }
 
     fun copySelection() {
@@ -548,6 +834,7 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
             }
         }
         requestInkRender()
+        sendEvent("onDrawingChange", Arguments.createMap())
     }
 
     fun moveSelection(dx: Float, dy: Float) {
@@ -570,17 +857,27 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
     }
 
     fun getSelectionCount(): Int {
-        return if (drawingEngine != 0L) getSelectionCount(drawingEngine) else 0
+        return runOnGlThreadSync {
+            if (drawingEngine != 0L) getSelectionCount(drawingEngine) else 0
+        } ?: 0
     }
 
     fun getSelectionBounds(): FloatArray? {
-        return if (drawingEngine != 0L) getSelectionBounds(drawingEngine) else null
+        return runOnGlThreadSync {
+            if (drawingEngine != 0L) getSelectionBounds(drawingEngine) else null
+        }
     }
 
     // State queries
-    fun canUndo(): Boolean = drawingEngine != 0L && canUndo(drawingEngine)
-    fun canRedo(): Boolean = drawingEngine != 0L && canRedo(drawingEngine)
-    fun isEmpty(): Boolean = drawingEngine == 0L || isEmpty(drawingEngine)
+    fun canUndo(): Boolean = runOnGlThreadSync {
+        drawingEngine != 0L && canUndo(drawingEngine)
+    } ?: false
+    fun canRedo(): Boolean = runOnGlThreadSync {
+        drawingEngine != 0L && canRedo(drawingEngine)
+    } ?: false
+    fun isEmpty(): Boolean = runOnGlThreadSync {
+        drawingEngine == 0L || isEmpty(drawingEngine)
+    } ?: true
 
     // Helper for synchronous GL thread operations with timeout
     private fun <T> runOnGlThreadSync(timeoutMs: Long = 2000, block: () -> T?): T? {
@@ -606,11 +903,14 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
     }
 
     fun deserializeDrawing(data: ByteArray): Boolean {
-        if (drawingEngine == 0L) return false
         val success = runOnGlThreadSync {
             if (drawingEngine != 0L) { deserializeDrawing(drawingEngine, data); true } else false
         } ?: false
-        requestInkRender()
+        if (success) {
+            resetTransientInteractionState()
+            requestInkRender()
+            emitSelectionChange()
+        }
         return success
     }
 
@@ -627,14 +927,11 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
 
     private fun exportToBase64(scale: Float, format: Bitmap.CompressFormat, quality: Int): String? {
         return try {
-            val fullBitmap = Bitmap.createBitmap(viewWidth, viewHeight, Bitmap.Config.ARGB_8888)
-            if (drawingEngine != 0L) renderToPixels(drawingEngine, fullBitmap)
-
-            val finalBitmap = if (scale != 1f) {
-                val w = (viewWidth * scale).toInt().coerceAtLeast(1)
-                val h = (viewHeight * scale).toInt().coerceAtLeast(1)
-                Bitmap.createScaledBitmap(fullBitmap, w, h, true).also { fullBitmap.recycle() }
-            } else fullBitmap
+            val actualScale = if (scale > 0f) scale else resources.displayMetrics.density
+            val width = (viewWidth * actualScale).toInt().coerceAtLeast(1)
+            val height = (viewHeight * actualScale).toInt().coerceAtLeast(1)
+            val finalBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            if (drawingEngine != 0L) renderToPixelsScaled(drawingEngine, finalBitmap, actualScale)
 
             val stream = java.io.ByteArrayOutputStream()
             finalBitmap.compress(format, quality, stream)
@@ -677,7 +974,7 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
         } else {
             payload.putNull("bounds")
         }
-        sendEvent("onSelectionChange", payload)
+        sendEvent("onInkSelectionChange", payload)
     }
 
     // Native method declarations
@@ -714,6 +1011,10 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
     private external fun pasteSelection(engine: Long, offsetX: Float, offsetY: Float)
     private external fun moveSelection(engine: Long, dx: Float, dy: Float)
     private external fun finalizeMove(engine: Long)
+    private external fun beginSelectionTransform(engine: Long, handleIndex: Int)
+    private external fun updateSelectionTransform(engine: Long, x: Float, y: Float)
+    private external fun finalizeSelectionTransform(engine: Long)
+    private external fun cancelSelectionTransform(engine: Long)
     private external fun getSelectionCount(engine: Long): Int
     private external fun getSelectionBounds(engine: Long): FloatArray?
 
@@ -728,6 +1029,7 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
 
     // Rendering
     private external fun renderToPixels(engine: Long, bitmap: Bitmap)
+    private external fun renderToPixelsScaled(engine: Long, bitmap: Bitmap, scale: Float)
     private external fun renderToByteArray(engine: Long, pixels: ByteArray, width: Int, height: Int)
 
     companion object {

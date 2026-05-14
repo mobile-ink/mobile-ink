@@ -72,7 +72,8 @@ export async function batchExportPages(
         width,
         height,
         scale,
-        pdfBackgroundUri || ""
+        pdfBackgroundUri || "",
+        pageIndices || []
       );
     }
 
@@ -98,17 +99,22 @@ export async function batchExportPages(
  * or if the native fast path isn't available (older build). Rejects on real
  * read/parse errors so the caller can fall back to the slow path.
  *
- * iOS-only: MobileInkBridge ships the parser. Android falls through to
- * the existing JS-side read+parse path.
+ * MobileInkBridge/MobileInkModule ship the parser on native platforms.
  */
 export async function readBodyFileParsed(
   bodyPath: string,
 ): Promise<Record<string, unknown> | null> {
-  if (Platform.OS !== "ios" || !MobileInkBridge?.readBodyFileParsed) {
+  if (
+    (Platform.OS === "ios" && !MobileInkBridge?.readBodyFileParsed) ||
+    (Platform.OS === "android" && !MobileInkModule?.readBodyFileParsed) ||
+    (Platform.OS !== "ios" && Platform.OS !== "android")
+  ) {
     return null;
   }
   try {
-    const result = await MobileInkBridge.readBodyFileParsed(bodyPath);
+    const result = Platform.OS === "ios"
+      ? await MobileInkBridge.readBodyFileParsed(bodyPath)
+      : await MobileInkModule.readBodyFileParsed(bodyPath);
     if (result === null || result === undefined) return null;
     if (typeof result !== "object") return null;
     return result as Record<string, unknown>;
@@ -125,11 +131,14 @@ export async function composeContinuousWindow(
   pagePayloads: string[],
   pageHeight: number
 ): Promise<string> {
-  if (Platform.OS !== "ios") {
-    throw new Error("Continuous window composition is only available on iOS.");
+  if (Platform.OS === "android") {
+    if (!MobileInkModule?.composeContinuousWindow) {
+      throw new Error("MobileInkModule.composeContinuousWindow not found. Please rebuild the app.");
+    }
+    return MobileInkModule.composeContinuousWindow(pagePayloads, pageHeight);
   }
 
-  if (!MobileInkBridge?.composeContinuousWindow) {
+  if (Platform.OS !== "ios" || !MobileInkBridge?.composeContinuousWindow) {
     throw new Error("MobileInkBridge.composeContinuousWindow not found. Please rebuild the app.");
   }
 
@@ -141,11 +150,14 @@ export async function decomposeContinuousWindow(
   pageCount: number,
   pageHeight: number
 ): Promise<string[]> {
-  if (Platform.OS !== "ios") {
-    throw new Error("Continuous window decomposition is only available on iOS.");
+  if (Platform.OS === "android") {
+    if (!MobileInkModule?.decomposeContinuousWindow) {
+      throw new Error("MobileInkModule.decomposeContinuousWindow not found. Please rebuild the app.");
+    }
+    return MobileInkModule.decomposeContinuousWindow(windowPayload, pageCount, pageHeight);
   }
 
-  if (!MobileInkBridge?.decomposeContinuousWindow) {
+  if (Platform.OS !== "ios" || !MobileInkBridge?.decomposeContinuousWindow) {
     throw new Error("MobileInkBridge.decomposeContinuousWindow not found. Please rebuild the app.");
   }
 

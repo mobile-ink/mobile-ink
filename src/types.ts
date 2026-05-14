@@ -86,6 +86,8 @@ export type NotebookPage = {
   title: string;
   data?: string;
   dataSignature?: string;
+  previewUri?: string;
+  previewDataSignature?: string;
   rotation: number;
   textBoxes?: InkTextBox[];
   insertedElements?: InsertedElement[];

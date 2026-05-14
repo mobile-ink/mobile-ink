@@ -138,7 +138,7 @@ class MobileInkCanvasView: MTKView {
 
     @objc var onDrawingChange: RCTDirectEventBlock?
     @objc var onDrawingBegin: RCTDirectEventBlock?
-    @objc var onSelectionChange: RCTDirectEventBlock?
+    @objc var onInkSelectionChange: RCTDirectEventBlock?
     @objc var onPencilDoubleTap: RCTDirectEventBlock?
     private var pencilDoubleTapSequence: Int = 0
     private var pendingPresentedLoadCallbacks: [RCTResponseSenderBlock] = []
@@ -273,7 +273,7 @@ class MobileInkCanvasView: MTKView {
         hasDeferredPresentation = false
         onDrawingChange = nil
         onDrawingBegin = nil
-        onSelectionChange = nil
+        onInkSelectionChange = nil
         onPencilDoubleTap = nil
         delegate = nil
         commandQueue = nil
@@ -1427,7 +1427,7 @@ class MobileInkCanvasView: MTKView {
             payload["bounds"] = NSNull()
         }
         updateSelectionToolbarFrame()
-        onSelectionChange?(payload)
+        onInkSelectionChange?(payload)
     }
 
     private func serializedDrawingData() -> Data? {

@@ -8,7 +8,8 @@
     "ios": "expo run:ios",
     "android": "expo run:android",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "export:ios": "expo export --platform ios --output-dir /tmp/mobile-ink-example-export"
+    "export:ios": "expo export --platform ios --output-dir /tmp/mobile-ink-example-export-ios",
+    "export:android": "expo export --platform android --output-dir /tmp/mobile-ink-example-export-android"
   },
   "dependencies": {
     "@mathnotes/mobile-ink": "file:..",
@@ -27,5 +28,8 @@
     "babel-preset-expo": "54.0.10",
     "typescript": "~5.9.2",
     "@types/react": "^19.1.0"
+  },
+  "overrides": {
+    "postcss": "8.5.10"
   }
 }

@@ -40,9 +40,9 @@ class DrawingContainerView: UIView, UIPencilInteractionDelegate {
     }
   }
 
-  @objc var onSelectionChange: RCTDirectEventBlock? {
+  @objc var onInkSelectionChange: RCTDirectEventBlock? {
     didSet {
-      drawingView?.onSelectionChange = onSelectionChange
+      drawingView?.onInkSelectionChange = onInkSelectionChange
     }
   }
 
@@ -107,8 +107,8 @@ class DrawingContainerView: UIView, UIPencilInteractionDelegate {
     if let handler = onDrawingBegin {
       view.onDrawingBegin = handler
     }
-    if let handler = onSelectionChange {
-      view.onSelectionChange = handler
+    if let handler = onInkSelectionChange {
+      view.onInkSelectionChange = handler
     }
     if let handler = onPencilDoubleTap {
       view.onPencilDoubleTap = handler

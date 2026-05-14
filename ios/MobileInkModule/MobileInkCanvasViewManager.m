@@ -5,7 +5,7 @@
 
 RCT_EXPORT_VIEW_PROPERTY(onDrawingChange, RCTDirectEventBlock)
 RCT_EXPORT_VIEW_PROPERTY(onDrawingBegin, RCTDirectEventBlock)
-RCT_EXPORT_VIEW_PROPERTY(onSelectionChange, RCTDirectEventBlock)
+RCT_EXPORT_VIEW_PROPERTY(onInkSelectionChange, RCTDirectEventBlock)
 RCT_EXPORT_VIEW_PROPERTY(onPencilDoubleTap, RCTDirectEventBlock)
 RCT_EXPORT_VIEW_PROPERTY(backgroundType, NSString)
 RCT_EXPORT_VIEW_PROPERTY(pdfBackgroundUri, NSString)

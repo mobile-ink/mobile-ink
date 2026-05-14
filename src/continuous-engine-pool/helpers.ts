@@ -1,4 +1,7 @@
-import type { ContinuousEnginePoolAssignment } from "./types";
+import type {
+  ContinuousEnginePoolAssignment,
+  NativeCanvasRef,
+} from "./types";
 
 export const BLANK_PAGE_PAYLOAD = '{"pages":{}}';
 export const OFFSCREEN_TOP = -100000;
@@ -33,3 +36,19 @@ export const getPdfBackgroundUri = (
 export const waitForNextFrame = () => new Promise<void>((resolve) => {
   requestAnimationFrame(() => resolve());
 });
+
+export const loadCanvasDataWithRetry = async (
+  canvas: NativeCanvasRef,
+  payload: string,
+  attempts = 90,
+) => {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (await canvas.loadBase64Data(payload)) {
+      return true;
+    }
+
+    await waitForNextFrame();
+  }
+
+  return false;
+};

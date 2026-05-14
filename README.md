@@ -37,12 +37,12 @@ mobile-ink is currently used in production in MathNotes: https://apps.apple.com/
 | Area | Current support |
 | --- | --- |
 | iOS Apple Pencil drawing | Used in production |
-| Native rendering | Custom `MTKView` backed by C++ Skia/Metal |
+| Native rendering | Custom iOS `MTKView` and Android `TextureView` backed by the shared C++ Skia engine |
 | Continuous notebooks | Fixed native engine pool with momentum scroll and pinch zoom |
 | Tools | Pen, highlighter, crayon, calligraphy, eraser, selection, and shape recognition |
 | Serialization | JSON notebook payloads plus native page load/save/export helpers |
 | Example app | Expo dev-client app with blank continuous notebook, tools, selection, save/reload, and zoom |
-| Android | Not supported yet |
+| Android | V1 native drawing support with GPU-backed Ganesh rendering, pooled pages, previews, save/reload, eraser, selection, and PDF backgrounds |
 | Expo Go | Not supported because this package includes native code |
 
 ## Demos
@@ -68,7 +68,7 @@ npm install @mathnotes/mobile-ink \
 cd ios && pod install
 ```
 
-For Expo apps, use a dev client or prebuild. Expo Go cannot load this native module.
+For Expo apps, use a dev client or prebuild. Expo Go cannot load this native module. Android builds also need a configured Android SDK, NDK, and CMake toolchain.
 
 Your app Babel config must include the Reanimated/Worklets plugin expected by your React Native/Reanimated version. For Expo SDK 54/Reanimated 4:
 
@@ -132,6 +132,8 @@ export function Notebook() {
 
 The `example/` folder is an Expo dev-client app that exercises the reusable canvas stack, not a MathNotes screen. It demos the full continuous canvas path: pencil drawing with finger navigation by default, optional draw-with-finger mode, pinch zoom, momentum scroll, engine-pool page assignment, MathNotes-style one-page trailing blank growth, tools, selection, and local save/reload on a blank page background.
 
+Expo Go cannot run the example because this package includes native Kotlin, C++, and iOS code. Use a dev-client build:
+
 ```sh
 cd example
 npm install
@@ -144,6 +146,21 @@ For a simulator:
 npx expo run:ios
 ```
 
+For Android:
+
+```sh
+npx expo run:android
+```
+
+The first Android build compiles the shared C++ drawing engine and can take a while. If the generated native project is stale after Android native changes, run:
+
+```sh
+npx expo prebuild --platform android --clean
+npx expo run:android
+```
+
+The Android example runs the drawing canvas path. The benchmark screen and CPU/Ganesh backend toggle are currently iOS-only. See [example/README.md](example/README.md) for Android prerequisites, Metro/dev-client commands, and smoke checks.
+
 ## Documentation
 
 - [Architecture](docs/architecture.md)
@@ -152,14 +169,14 @@ npx expo run:ios
 
 ## Roadmap
 
-Near-term work is focused on making the public package easier to adopt and easier to contribute to, and achieving Android parity:
+Near-term work is focused on making the public package easier to adopt and easier to contribute to, and hardening Android v1:
 
 - Improve install and troubleshooting docs for React Native and Expo dev-client apps.
 - Add more integration recipes for save/load, tool switching, and app-owned storage.
 - Tighten selection transform performance for large stroke groups.
 - Improve edge-case zoom behavior near page and canvas boundaries.
 - Continue hardening the example app as a small regression harness.
-- Complete Android parity with iOS. We started this but it is still not quite there.
+- Add the Android native benchmark runner and expose Android benchmark controls in the example app.
 
 ## Development
 
@@ -173,6 +190,7 @@ npm pack --dry-run --ignore-scripts
 npm ci --prefix example
 npm run test:example:typecheck
 npm run test:example:export:ios
+npm run test:example:export:android
 ```
 
 `npm run build` creates `lib/` for npm packaging. The React Native entry still points at `src/index.ts` so Metro can transform worklet directives with the consuming app's Babel config.

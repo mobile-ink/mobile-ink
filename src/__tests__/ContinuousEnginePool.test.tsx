@@ -1,4 +1,5 @@
 import React from "react";
+import { StyleSheet } from "react-native";
 import { act, render } from "@testing-library/react-native";
 import {
   ContinuousEnginePool,
@@ -11,6 +12,7 @@ import type { NotebookPage } from "../types";
 
 const mockLoadBase64Data = jest.fn(async () => true);
 const mockGetBase64Data = jest.fn(async () => '{"pages":{"0":"persisted"}}');
+const mockGetBase64PngData = jest.fn(async () => "data:image/png;base64,preview");
 const mockReleaseEngine = jest.fn(async () => undefined);
 const mockSetTool = jest.fn();
 const mockSetNativeProps = jest.fn();
@@ -63,6 +65,7 @@ jest.mock("../NativeInkCanvas", () => {
         setNativeProps: mockSetNativeProps,
         loadBase64Data: mockLoadBase64Data,
         getBase64Data: mockGetBase64Data,
+        getBase64PngData: mockGetBase64PngData,
         releaseEngine: mockReleaseEngine,
         runBenchmark: mockRunBenchmark,
         startBenchmarkRecording: mockStartBenchmarkRecording,
@@ -173,6 +176,7 @@ describe("ContinuousEnginePool", () => {
     expect(onSlotCaptureBeforeUnmount).toHaveBeenCalledWith(
       "page-0",
       '{"pages":{"0":"persisted"}}',
+      "data:image/png;base64,preview",
     );
 
     view.unmount();
@@ -239,6 +243,23 @@ describe("ContinuousEnginePool", () => {
     expect(mockLoadBase64Data).not.toHaveBeenCalled();
   });
 
+  it("retries page loads until the native engine accepts the payload", async () => {
+    const pages = [page(0)];
+    mockLoadBase64Data
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const { poolRef } = renderPool();
+
+    await act(async () => {});
+    await assignPages(poolRef, buildAssignments(pages, 0));
+
+    expect(mockLoadBase64Data).toHaveBeenCalledTimes(3);
+    expect(mockLoadBase64Data).toHaveBeenNthCalledWith(1, "data-0");
+    expect(mockLoadBase64Data).toHaveBeenNthCalledWith(2, "data-0");
+    expect(mockLoadBase64Data).toHaveBeenNthCalledWith(3, "data-0");
+  });
+
   it("preserves already loaded page slots across adjacent page changes", async () => {
     const pages = [page(0), page(1), page(2), page(3)];
     const { poolRef } = renderPool();
@@ -251,6 +272,33 @@ describe("ContinuousEnginePool", () => {
 
     expect(mockLoadBase64Data).toHaveBeenCalledTimes(1);
     expect(mockLoadBase64Data).toHaveBeenCalledWith("data-3");
+  });
+
+  it("keeps pooled slot frames in React layout state", async () => {
+    const pages = [page(0), page(1), page(2)];
+    const { poolRef, view } = renderPool();
+
+    await act(async () => {});
+    await assignPages(poolRef, buildAssignments(pages, 0));
+
+    const firstSlot = view.getByTestId("continuous-engine-pool-slot-0");
+    const secondSlot = view.getByTestId("continuous-engine-pool-slot-1");
+    expect(firstSlot.props.pointerEvents).toBe("auto");
+    expect(StyleSheet.flatten(firstSlot.props.style)).toEqual(
+      expect.objectContaining({ top: 0, height: 800, opacity: 1 }),
+    );
+    expect(secondSlot.props.pointerEvents).toBe("auto");
+    expect(StyleSheet.flatten(secondSlot.props.style)).toEqual(
+      expect.objectContaining({ top: 800, height: 800, opacity: 1 }),
+    );
+
+    await assignPages(poolRef, buildAssignments([pages[0]], 0));
+
+    const hiddenSecondSlot = view.getByTestId("continuous-engine-pool-slot-1");
+    expect(hiddenSecondSlot.props.pointerEvents).toBe("none");
+    expect(StyleSheet.flatten(hiddenSecondSlot.props.style)).toEqual(
+      expect.objectContaining({ top: -100000, height: 800, opacity: 0 }),
+    );
   });
 
   it("forwards pencil double-tap events to every pooled native canvas", async () => {

@@ -6,14 +6,16 @@ import React, {
   useImperativeHandle,
   useMemo,
   useRef,
+  useState,
 } from "react";
-import { StyleSheet, View } from "react-native";
+import { Image, StyleSheet, View } from "react-native";
 import { NativeInkCanvas } from "../NativeInkCanvas";
 import type { NativeInkBenchmarkRecordingOptions } from "../benchmark";
 import type { NativeSelectionBounds } from "../types";
 import {
   BLANK_PAGE_PAYLOAD,
   getPdfBackgroundUri,
+  loadCanvasDataWithRetry,
   OFFSCREEN_TOP,
   waitForNextFrame,
 } from "./helpers";
@@ -26,6 +28,24 @@ import type {
   PooledCanvasSlotHandle,
   PooledCanvasSlotProps,
 } from "./types";
+
+type SlotPointerEvents = "auto" | "none";
+
+type SlotFrame = {
+  top: number;
+  height: number;
+  opacity: number;
+  pointerEvents: SlotPointerEvents;
+};
+
+const PAGE_PREVIEW_CAPTURE_SCALE = 0.25;
+
+const hiddenSlotFrame = (height = 0): SlotFrame => ({
+  top: OFFSCREEN_TOP,
+  height,
+  opacity: 0,
+  pointerEvents: "none",
+});
 
 export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCanvasSlotProps>(
   function PooledCanvasSlot({
@@ -48,6 +68,9 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
   }, ref) {
     const slotViewRef = useRef<View | null>(null);
     const canvasRef = useRef<NativeCanvasRef | null>(null);
+    const [slotFrame, setSlotFrameState] = useState<SlotFrame>(() => hiddenSlotFrame());
+    const [previewUri, setPreviewUri] = useState<string | null>(null);
+    const [isPreviewVisible, setIsPreviewVisible] = useState(false);
     const lastAttachedCanvasRef = useRef<NativeCanvasRef | null>(null);
     const nativeReadyRef = useRef(false);
     const nativeReadyWaitersRef = useRef<Array<() => void>>([]);
@@ -93,12 +116,23 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
       pageIndex: number | null,
       height: number,
       isVisible: boolean,
+      isInteractive = isVisible,
     ) => {
+      const nextFrame: SlotFrame = pageIndex === null
+        ? hiddenSlotFrame(height)
+        : {
+            top: pageIndex * height,
+            height,
+            opacity: isVisible ? 1 : 0,
+            pointerEvents: isInteractive ? "auto" : "none",
+          };
+
+      setSlotFrameState(nextFrame);
       slotViewRef.current?.setNativeProps({
         style: {
-          top: pageIndex === null ? OFFSCREEN_TOP : pageIndex * height,
-          height,
-          opacity: pageIndex === null || !isVisible ? 0 : 1,
+          top: nextFrame.top,
+          height: nextFrame.height,
+          opacity: nextFrame.opacity,
         },
       });
     }, []);
@@ -133,6 +167,14 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
             return data || BLANK_PAGE_PAYLOAD;
           } catch {
             return BLANK_PAGE_PAYLOAD;
+          }
+        },
+        getPreviewData: async (scale = PAGE_PREVIEW_CAPTURE_SCALE) => {
+          if (!canvasRef.current) return null;
+          try {
+            return await canvasRef.current.getBase64PngData(scale);
+          } catch {
+            return null;
           }
         },
         isLoaded: () => isLoadedRef.current,
@@ -195,7 +237,13 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
       try {
         const data = await sourceRef.getBase64Data();
         if (data) {
-          captureCallbackRef.current(pageId, data);
+          let previewUri: string | null = null;
+          try {
+            previewUri = await sourceRef.getBase64PngData(PAGE_PREVIEW_CAPTURE_SCALE);
+          } catch {
+            previewUri = null;
+          }
+          captureCallbackRef.current(pageId, data, previewUri || undefined);
         }
       } catch {
         // A native serialize can fail during teardown. The normal save path
@@ -235,6 +283,8 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
       currentAssignmentRef.current = null;
       isLoadedRef.current = false;
       loadedPageIdRef.current = null;
+      setPreviewUri(null);
+      setIsPreviewVisible(false);
       setNativeCanvasVisible(false);
       setSlotFrame(null, canvasHeight, false);
     }, [
@@ -259,16 +309,18 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
 
       const nextPageId = assignment.page.id;
       const previousPageId = loadedPageIdRef.current;
-      const previousPageIndex = currentAssignmentRef.current?.pageIndex ?? null;
       const isAlreadyLoadedPage =
         previousPageId === nextPageId && isLoadedRef.current;
       const token = loadTokenRef.current + 1;
+      const nextPreviewUri = assignment.page.previewUri ?? null;
       loadTokenRef.current = token;
       currentAssignmentRef.current = assignment;
 
       if (!isAlreadyLoadedPage) {
+        setPreviewUri(nextPreviewUri);
+        setIsPreviewVisible(Boolean(nextPreviewUri));
         setNativeCanvasVisible(false);
-        setSlotFrame(previousPageIndex, nextCanvasHeight, false);
+        setSlotFrame(assignment.pageIndex, nextCanvasHeight, true, false);
         await waitForNextFrame();
         if (
           loadTokenRef.current !== token ||
@@ -278,7 +330,12 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
         }
       }
 
-      setSlotFrame(assignment.pageIndex, nextCanvasHeight, isAlreadyLoadedPage);
+      setSlotFrame(
+        assignment.pageIndex,
+        nextCanvasHeight,
+        true,
+        isAlreadyLoadedPage,
+      );
 
       await waitForNativeReady();
       if (
@@ -294,6 +351,8 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
       }
 
       if (isAlreadyLoadedPage) {
+        setPreviewUri(nextPreviewUri);
+        setIsPreviewVisible(false);
         canvas.setNativeProps?.({
           backgroundType: nextBackgroundType,
           pdfBackgroundUri: getPdfBackgroundUri(
@@ -340,7 +399,13 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
       loadedPageIdRef.current = null;
 
       try {
-        await canvas.loadBase64Data(assignment.page.data || BLANK_PAGE_PAYLOAD);
+        const didLoad = await loadCanvasDataWithRetry(
+          canvas,
+          assignment.page.data || BLANK_PAGE_PAYLOAD,
+        );
+        if (!didLoad) {
+          throw new Error(`Native canvas engine was not ready for page ${nextPageId}.`);
+        }
         if (loadTokenRef.current !== token) {
           return;
         }
@@ -362,6 +427,7 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
 
         setSlotFrame(assignment.pageIndex, nextCanvasHeight, true);
         setNativeCanvasVisible(true);
+        setIsPreviewVisible(false);
         onSlotLoadedRef.current?.(
           poolIndex,
           assignmentKey,
@@ -373,6 +439,7 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
           loadedPageIdRef.current = null;
           isLoadedRef.current = false;
           setNativeCanvasVisible(false);
+          setIsPreviewVisible(Boolean(nextPreviewUri));
         }
       }
     }, [
@@ -502,10 +569,29 @@ export const PooledCanvasSlot = memo(forwardRef<PooledCanvasSlotHandle, PooledCa
     return (
       <View
         ref={slotViewRef}
-        style={styles.slot}
-        pointerEvents="auto"
+        style={[
+          styles.slot,
+          {
+            top: slotFrame.top,
+            height: slotFrame.height,
+            opacity: slotFrame.opacity,
+          },
+        ]}
+        pointerEvents={slotFrame.pointerEvents}
+        collapsable={false}
         testID={`continuous-engine-pool-slot-${poolIndex}`}
       >
+        {previewUri ? (
+          <Image
+            source={{ uri: previewUri }}
+            style={[
+              styles.previewImage,
+              !isPreviewVisible && styles.hiddenPreviewImage,
+            ]}
+            resizeMode="stretch"
+            testID={`continuous-engine-pool-preview-${poolIndex}`}
+          />
+        ) : null}
         <NativeInkCanvas
           ref={setNativeCanvasRef}
           style={styles.nativeCanvas}
@@ -550,5 +636,11 @@ const styles = StyleSheet.create({
   },
   nativeCanvas: {
     ...StyleSheet.absoluteFillObject,
+  },
+  previewImage: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  hiddenPreviewImage: {
+    opacity: 0,
   },
 });

@@ -220,6 +220,10 @@ const ZoomableInkViewport = forwardRef<ZoomableInkViewportRef, ZoomableInkViewpo
       savedTranslateY.value = 0;
     }, [scale, translateX, translateY, savedScale, savedTranslateX, savedTranslateY]);
 
+    const contentFrameStyle = useMemo(() => ({
+      height: Math.max(0, contentHeight + contentPadding * 2),
+    }), [contentHeight, contentPadding]);
+
     const isZoomed = useCallback(() => {
       return scale.value > 1.05;
     }, [scale]);
@@ -272,6 +276,11 @@ const ZoomableInkViewport = forwardRef<ZoomableInkViewportRef, ZoomableInkViewpo
 
     const animatedStyle = useAnimatedStyle(() => {
       return {
+        transformOrigin: [
+          containerWidth.value / 2,
+          containerHeight.value / 2,
+          0,
+        ],
         transform: [
           { translateX: translateX.value },
           { translateY: translateY.value },
@@ -284,7 +293,9 @@ const ZoomableInkViewport = forwardRef<ZoomableInkViewportRef, ZoomableInkViewpo
     if (!enabled) {
       return (
         <View style={[styles.container, style]} onLayout={handleLayout}>
-          {children}
+          <View style={contentFrameStyle}>
+            {children}
+          </View>
         </View>
       );
     }
@@ -296,7 +307,10 @@ const ZoomableInkViewport = forwardRef<ZoomableInkViewportRef, ZoomableInkViewpo
       <View ref={viewportRef} style={[styles.clipContainer, style]} collapsable={false}>
         <GestureDetector gesture={composedGesture}>
           <View style={styles.container} onLayout={handleLayout}>
-            <Animated.View style={[styles.transformedContent, animatedStyle]}>
+            <Animated.View
+              collapsable={false}
+              style={[styles.transformedContent, contentFrameStyle, animatedStyle]}
+            >
               {children}
             </Animated.View>
           </View>
@@ -315,7 +329,10 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   transformedContent: {
-    ...StyleSheet.absoluteFillObject,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
   },
 });
 

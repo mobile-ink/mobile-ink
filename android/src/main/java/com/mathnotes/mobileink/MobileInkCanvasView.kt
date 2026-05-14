@@ -32,8 +32,9 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
     private var engineHeight: Int = 0
     private var nativeLibraryAvailable: Boolean = false
     @Volatile private var surfaceReady: Boolean = false
-    private val renderThread = HandlerThread("MobileInkCanvasViewRender").also { it.start() }
-    private val renderHandler = Handler(renderThread.looper)
+    private val renderThreadLock = Any()
+    private var renderThread: HandlerThread? = null
+    private var renderHandler: Handler? = null
     private var renderSurface: Surface? = null
     private var eglDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
     private var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
@@ -81,6 +82,7 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
     init {
         // Try to load native library - don't crash if it fails
         nativeLibraryAvailable = ensureLibraryLoaded()
+        ensureRenderHandler()
         isOpaque = false
         isClickable = true
         isFocusable = true
@@ -326,13 +328,42 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
         }
     }
 
+    private fun ensureRenderHandler(): Handler {
+        synchronized(renderThreadLock) {
+            val existingThread = renderThread
+            val existingHandler = renderHandler
+            if (existingThread != null && existingThread.isAlive && existingHandler != null) {
+                return existingHandler
+            }
+
+            val thread = HandlerThread("MobileInkCanvasViewRender").also { it.start() }
+            val handler = Handler(thread.looper)
+            renderThread = thread
+            renderHandler = handler
+            return handler
+        }
+    }
+
+    private fun stopRenderThread() {
+        val threadToStop = synchronized(renderThreadLock) {
+            val thread = renderThread
+            renderThread = null
+            renderHandler = null
+            thread
+        }
+        threadToStop?.quitSafely()
+    }
+
     private fun queueEvent(block: () -> Unit) {
-        if (Looper.myLooper() == renderHandler.looper) {
+        val handler = ensureRenderHandler()
+        if (Looper.myLooper() == handler.looper) {
             block()
             return
         }
 
-        renderHandler.post(block)
+        if (!handler.post(block)) {
+            android.util.Log.e("MobileInkCanvasView", "Failed to post GL operation to render thread")
+        }
     }
 
     /**
@@ -391,11 +422,21 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        ensureRenderHandler()
         // Register this view with MobileInkModule for bridgeless architecture support
         // The 'id' is set by React Native to the view's React tag
         if (id != -1 && id != 0) {
             registeredTag = id
             MobileInkModule.registerView(id, this)
+        }
+        val texture = surfaceTexture
+        val currentWidth = width
+        val currentHeight = height
+        if (!surfaceReady && isAvailable && texture != null && currentWidth > 0 && currentHeight > 0) {
+            texture.setDefaultBufferSize(currentWidth, currentHeight)
+            queueEvent {
+                createRenderSurface(texture, currentWidth, currentHeight)
+            }
         }
     }
 
@@ -434,7 +475,7 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
             destroyRenderSurface()
             true
         }
-        renderThread.quitSafely()
+        stopRenderThread()
         super.onDetachedFromWindow()
     }
 
@@ -1085,14 +1126,15 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
 
     // Helper for synchronous GL thread operations with timeout
     private fun <T> runOnGlThreadSync(timeoutMs: Long = 2000, block: () -> T?): T? {
-        if (Looper.myLooper() == renderHandler.looper) {
+        val handler = ensureRenderHandler()
+        if (Looper.myLooper() == handler.looper) {
             return block()
         }
 
         val latch = java.util.concurrent.CountDownLatch(1)
         var result: T? = null
         var failure: Throwable? = null
-        queueEvent {
+        if (!handler.post {
             try {
                 result = block()
             } catch (throwable: Throwable) {
@@ -1100,6 +1142,9 @@ class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.
             } finally {
                 latch.countDown()
             }
+        }) {
+            android.util.Log.e("MobileInkCanvasView", "Failed to post synchronous GL operation")
+            return null
         }
         try {
             val completed = latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)

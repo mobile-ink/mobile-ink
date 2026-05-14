@@ -5,11 +5,15 @@
 #include "SkiaDrawingEngine.h"
 #include "DrawingSerialization.h"
 #include <include/core/SkCanvas.h>
+#include <include/core/SkColorFilter.h>
+#include <include/core/SkPaint.h>
 #include <include/core/SkSurface.h>
 #include <include/core/SkImageInfo.h>
 #include <include/core/SkImage.h>
 #include <include/core/SkData.h>
 #include <include/core/SkColorSpace.h>
+#include <include/core/SkSamplingOptions.h>
+#include <include/effects/SkColorMatrix.h>
 #include <include/gpu/ganesh/GrBackendSurface.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
 #include <include/gpu/ganesh/SkSurfaceGanesh.h>
@@ -77,6 +81,52 @@ bool deserializeDrawingBytes(
 
     const std::vector<uint8_t> buffer(data, data + size);
     return serializer.deserialize(buffer, strokes);
+}
+
+sk_sp<SkColorFilter> makeRedBlueSwapFilter() {
+    float redBlueSwapMatrix[20] = {
+        0, 0, 1, 0, 0,
+        0, 1, 0, 0, 0,
+        1, 0, 0, 0, 0,
+        0, 0, 0, 1, 0
+    };
+
+    return SkColorFilters::Matrix(redBlueSwapMatrix);
+}
+
+sk_sp<SkImage> makeRedBlueSwappedImage(const sk_sp<SkImage>& image) {
+    if (!image) {
+        return nullptr;
+    }
+
+    SkImageInfo info = SkImageInfo::MakeN32Premul(image->width(), image->height());
+    sk_sp<SkSurface> surface = SkSurfaces::Raster(info);
+    if (!surface) {
+        return image;
+    }
+
+    SkPaint outputPaint;
+    outputPaint.setColorFilter(makeRedBlueSwapFilter());
+    surface->getCanvas()->drawImage(
+        image,
+        0,
+        0,
+        SkSamplingOptions(),
+        &outputPaint
+    );
+    return surface->makeImageSnapshot();
+}
+
+void renderWithDisplayColorOrdering(SkiaDrawingEngine* engine, SkCanvas* canvas) {
+    if (!engine || !canvas) {
+        return;
+    }
+
+    SkPaint outputPaint;
+    outputPaint.setColorFilter(makeRedBlueSwapFilter());
+    canvas->saveLayer(nullptr, &outputPaint);
+    engine->render(canvas);
+    canvas->restore();
 }
 
 void translateStrokeInPlace(Stroke& stroke, float deltaY, size_t affectedStrokeOffset) {
@@ -536,7 +586,7 @@ Java_com_mathnotes_mobileink_MobileInkCanvasView_setPdfBackgroundBitmap(
     sk_sp<SkImage> image = SkImages::RasterFromData(skInfo, data, info.stride);
 
     if (image) {
-        ctx->engine->setPdfBackgroundImage(image);
+        ctx->engine->setPdfBackgroundImage(makeRedBlueSwappedImage(image));
     } else {
         LOGE("setPdfBackgroundBitmap: failed to create SkImage");
     }
@@ -812,7 +862,7 @@ Java_com_mathnotes_mobileink_MobileInkCanvasView_renderGaneshToCurrentSurface(
     }
 
     SkCanvas* canvas = ctx->ganeshSurface->getCanvas();
-    ctx->engine->render(canvas);
+    renderWithDisplayColorOrdering(ctx->engine.get(), canvas);
     ctx->ganeshContext->flushAndSubmit(ctx->ganeshSurface.get());
     return JNI_TRUE;
 }
@@ -873,7 +923,7 @@ Java_com_mathnotes_mobileink_MobileInkCanvasView_renderToPixelsScaled(
     const float resolvedScale = scale > 0.0f ? scale : 1.0f;
     canvas->save();
     canvas->scale(resolvedScale, resolvedScale);
-    ctx->engine->render(canvas);
+    renderWithDisplayColorOrdering(ctx->engine.get(), canvas);
     canvas->restore();
 
     AndroidBitmap_unlockPixels(env, bitmap);

@@ -1,4 +1,5 @@
 #include "DrawingSelection.h"
+#include "ShapeRecognition.h"
 #include <include/effects/SkDashPathEffect.h>
 #include <algorithm>
 #include <cmath>

@@ -1,5 +1,6 @@
 #include "StrokeSplitter.h"
 #include "PathRenderer.h"
+#include "ShapeRecognition.h"
 #include <cmath>
 
 namespace nativedrawing {

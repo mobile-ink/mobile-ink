@@ -1,4 +1,7 @@
 #include "DrawingSerialization.h"
+#include "ShapeRecognition.h"
+#include <include/core/SkBlendMode.h>
+#include <include/core/SkPathMeasure.h>
 #include <algorithm>
 #include <cstring>
 #include <cstdio>

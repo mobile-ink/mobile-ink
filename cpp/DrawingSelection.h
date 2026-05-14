@@ -4,7 +4,8 @@
 #include <unordered_set>
 #include <limits>
 #include <functional>
-#include "SkiaDrawingEngine.h"
+#include <include/core/SkCanvas.h>
+#include "DrawingTypes.h"
 
 namespace nativedrawing {
 

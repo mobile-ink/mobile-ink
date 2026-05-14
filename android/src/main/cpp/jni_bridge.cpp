@@ -9,6 +9,15 @@
 #include <include/core/SkImageInfo.h>
 #include <include/core/SkImage.h>
 #include <include/core/SkData.h>
+#include <include/core/SkColorSpace.h>
+#include <include/gpu/ganesh/GrBackendSurface.h>
+#include <include/gpu/ganesh/GrDirectContext.h>
+#include <include/gpu/ganesh/SkSurfaceGanesh.h>
+#include <include/gpu/ganesh/gl/GrGLBackendSurface.h>
+#include <include/gpu/ganesh/gl/GrGLDirectContext.h>
+#include <include/gpu/ganesh/gl/GrGLInterface.h>
+#include <include/gpu/ganesh/gl/GrGLTypes.h>
+#include <src/gpu/ganesh/gl/GrGLDefines.h>
 #include <algorithm>
 #include <cmath>
 #include <memory>
@@ -287,20 +296,26 @@ std::vector<std::vector<uint8_t>> decomposeContinuousWindowBytes(
 
 } // namespace
 
-// DrawingContext holds the engine and a raster surface for CPU rendering
+// DrawingContext owns the shared drawing model plus the active Ganesh render surface.
 struct DrawingContext {
     std::unique_ptr<SkiaDrawingEngine> engine;
-    sk_sp<SkSurface> surface;
-    int width;
-    int height;
+    sk_sp<GrDirectContext> ganeshContext;
+    sk_sp<SkSurface> ganeshSurface;
+    int ganeshSurfaceWidth = 0;
+    int ganeshSurfaceHeight = 0;
+    int ganeshSamples = -1;
+    int ganeshStencil = -1;
 
-    DrawingContext(int w, int h) : width(w), height(h) {
+    DrawingContext(int w, int h) {
         engine = std::make_unique<SkiaDrawingEngine>(w, h);
+    }
 
-        // Create raster surface for CPU rendering
-        SkImageInfo info = SkImageInfo::MakeN32Premul(w, h);
-        surface = SkSurfaces::Raster(info);
-
+    ~DrawingContext() {
+        ganeshSurface = nullptr;
+        if (ganeshContext) {
+            ganeshContext->abandonContext();
+            ganeshContext = nullptr;
+        }
     }
 };
 
@@ -722,39 +737,102 @@ Java_com_mathnotes_mobileink_MobileInkCanvasView_deserializeDrawing(
     }
 }
 
-JNIEXPORT void JNICALL
-Java_com_mathnotes_mobileink_MobileInkCanvasView_renderToPixels(
-    JNIEnv* env, jobject obj, jlong contextPtr, jobject bitmap) {
+JNIEXPORT jboolean JNICALL
+Java_com_mathnotes_mobileink_MobileInkCanvasView_renderGaneshToCurrentSurface(
+    JNIEnv* env, jobject obj, jlong contextPtr, jint width, jint height) {
 
     auto* ctx = reinterpret_cast<DrawingContext*>(contextPtr);
-    if (!ctx || !ctx->engine || !ctx->surface) {
-        LOGE("renderToPixels: invalid context");
-        return;
+    if (!ctx || !ctx->engine || width <= 0 || height <= 0) {
+        LOGE("renderGaneshToCurrentSurface: invalid context or size");
+        return JNI_FALSE;
     }
 
-    // Get bitmap info
-    AndroidBitmapInfo info;
-    if (AndroidBitmap_getInfo(env, bitmap, &info) != ANDROID_BITMAP_RESULT_SUCCESS) {
-        LOGE("renderToPixels: failed to get bitmap info");
-        return;
+    if (!ctx->ganeshContext) {
+        auto backendInterface = GrGLMakeNativeInterface();
+        if (!backendInterface) {
+            LOGE("renderGaneshToCurrentSurface: failed to create GL interface");
+            return JNI_FALSE;
+        }
+        ctx->ganeshContext = GrDirectContexts::MakeGL(backendInterface);
+        if (!ctx->ganeshContext) {
+            LOGE("renderGaneshToCurrentSurface: failed to create Ganesh context");
+            return JNI_FALSE;
+        }
     }
 
-    // Lock pixels
-    void* pixels = nullptr;
-    if (AndroidBitmap_lockPixels(env, bitmap, &pixels) != ANDROID_BITMAP_RESULT_SUCCESS) {
-        LOGE("renderToPixels: failed to lock pixels");
-        return;
+    GLint stencil = 0;
+    GLint samples = 0;
+    glGetIntegerv(GL_STENCIL_BITS, &stencil);
+    glGetIntegerv(GL_SAMPLES, &samples);
+
+    const auto colorType = kRGBA_8888_SkColorType;
+    const auto maxSamples =
+        ctx->ganeshContext->maxSurfaceSampleCountForColorType(colorType);
+    if (samples > maxSamples) {
+        samples = maxSamples;
     }
 
-    // Render to surface - engine handles background clearing and pattern rendering
-    SkCanvas* canvas = ctx->surface->getCanvas();
+    if (
+        !ctx->ganeshSurface ||
+        ctx->ganeshSurfaceWidth != width ||
+        ctx->ganeshSurfaceHeight != height ||
+        ctx->ganeshSamples != samples ||
+        ctx->ganeshStencil != stencil
+    ) {
+        ctx->ganeshSurface = nullptr;
+
+        GrGLFramebufferInfo fbInfo;
+        fbInfo.fFBOID = 0;
+        fbInfo.fFormat = GR_GL_RGBA8;
+
+        auto backendRenderTarget =
+            GrBackendRenderTargets::MakeGL(width, height, samples, stencil, fbInfo);
+        SkSurfaceProps surfaceProps(0, kRGB_H_SkPixelGeometry);
+        ctx->ganeshSurface = SkSurfaces::WrapBackendRenderTarget(
+            ctx->ganeshContext.get(),
+            backendRenderTarget,
+            kBottomLeft_GrSurfaceOrigin,
+            colorType,
+            nullptr,
+            &surfaceProps
+        );
+
+        if (!ctx->ganeshSurface) {
+            LOGE("renderGaneshToCurrentSurface: failed to wrap EGL render target");
+            return JNI_FALSE;
+        }
+
+        ctx->ganeshSurfaceWidth = width;
+        ctx->ganeshSurfaceHeight = height;
+        ctx->ganeshSamples = samples;
+        ctx->ganeshStencil = stencil;
+    }
+
+    SkCanvas* canvas = ctx->ganeshSurface->getCanvas();
     ctx->engine->render(canvas);
+    ctx->ganeshContext->flushAndSubmit(ctx->ganeshSurface.get());
+    return JNI_TRUE;
+}
 
-    // Read pixels from surface into bitmap
-    SkImageInfo dstInfo = SkImageInfo::MakeN32Premul(info.width, info.height);
-    ctx->surface->readPixels(dstInfo, pixels, info.stride, 0, 0);
+JNIEXPORT void JNICALL
+Java_com_mathnotes_mobileink_MobileInkCanvasView_releaseGaneshContext(
+    JNIEnv* env, jobject obj, jlong contextPtr) {
 
-    AndroidBitmap_unlockPixels(env, bitmap);
+    auto* ctx = reinterpret_cast<DrawingContext*>(contextPtr);
+    if (!ctx) {
+        return;
+    }
+
+    ctx->ganeshSurface = nullptr;
+    ctx->ganeshSurfaceWidth = 0;
+    ctx->ganeshSurfaceHeight = 0;
+    ctx->ganeshSamples = -1;
+    ctx->ganeshStencil = -1;
+
+    if (ctx->ganeshContext) {
+        ctx->ganeshContext->releaseResourcesAndAbandonContext();
+        ctx->ganeshContext = nullptr;
+    }
 }
 
 JNIEXPORT void JNICALL
@@ -796,48 +874,6 @@ Java_com_mathnotes_mobileink_MobileInkCanvasView_renderToPixelsScaled(
     canvas->restore();
 
     AndroidBitmap_unlockPixels(env, bitmap);
-}
-
-// Alternative: render to byte array for cases where bitmap isn't convenient
-JNIEXPORT void JNICALL
-Java_com_mathnotes_mobileink_MobileInkCanvasView_renderToByteArray(
-    JNIEnv* env, jobject obj, jlong contextPtr, jbyteArray pixels, jint width, jint height) {
-
-    auto* ctx = reinterpret_cast<DrawingContext*>(contextPtr);
-    if (!ctx || !ctx->engine || !ctx->surface) {
-        LOGE("renderToByteArray: invalid context");
-        return;
-    }
-
-    // Render to surface - engine handles background clearing and pattern rendering
-    SkCanvas* canvas = ctx->surface->getCanvas();
-    ctx->engine->render(canvas);
-
-    // Get pixel data
-    jbyte* pixelData = env->GetByteArrayElements(pixels, nullptr);
-
-    SkImageInfo dstInfo = SkImageInfo::MakeN32Premul(width, height);
-    ctx->surface->readPixels(dstInfo, pixelData, width * 4, 0, 0);
-
-    env->ReleaseByteArrayElements(pixels, pixelData, 0);
-}
-
-// Resize the drawing context when view size changes
-JNIEXPORT void JNICALL
-Java_com_mathnotes_mobileink_MobileInkCanvasView_resizeEngine(
-    JNIEnv* env, jobject obj, jlong contextPtr, jint width, jint height) {
-
-    auto* ctx = reinterpret_cast<DrawingContext*>(contextPtr);
-    if (ctx) {
-        // Recreate surface with new size
-        SkImageInfo info = SkImageInfo::MakeN32Premul(width, height);
-        ctx->surface = SkSurfaces::Raster(info);
-        ctx->width = width;
-        ctx->height = height;
-
-        // Note: The engine itself doesn't need resizing as strokes are stored
-        // in absolute coordinates. We just need the new render surface.
-    }
 }
 
 // Batch export multiple pages to PNG images

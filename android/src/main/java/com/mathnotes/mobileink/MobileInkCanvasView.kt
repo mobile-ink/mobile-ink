@@ -2,29 +2,42 @@ package com.mathnotes.mobileink
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.PixelFormat
-import android.opengl.GLSurfaceView
+import android.graphics.SurfaceTexture
+import android.opengl.EGL14
+import android.opengl.EGLConfig
+import android.opengl.EGLContext
+import android.opengl.EGLDisplay
+import android.opengl.EGLSurface
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.os.SystemClock
 import android.view.MotionEvent
+import android.view.Surface
+import android.view.TextureView
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.ReactContext
 import com.facebook.react.uimanager.events.RCTEventEmitter
 
-class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEngineHost {
+class MobileInkCanvasView(context: Context) : TextureView(context), TextureView.SurfaceTextureListener {
 
     private val perpendicularAltitude: Float = Math.PI.toFloat() / 2f
     private val minimumStylusPressure: Float = 0.015f
     private val stylusPressureExponent: Float = 0.88f
 
-    private var drawingEngine: Long = 0
-    private val renderer: DrawingRenderer
-    private var viewWidth: Int = 0
-    private var viewHeight: Int = 0
+    @Volatile private var drawingEngine: Long = 0
+    @Volatile private var viewWidth: Int = 0
+    @Volatile private var viewHeight: Int = 0
     private var engineWidth: Int = 0
     private var engineHeight: Int = 0
     private var nativeLibraryAvailable: Boolean = false
+    @Volatile private var surfaceReady: Boolean = false
+    private val renderThread = HandlerThread("MobileInkCanvasViewRender").also { it.start() }
+    private val renderHandler = Handler(renderThread.looper)
+    private var renderSurface: Surface? = null
+    private var eglDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
+    private var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
+    private var eglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
 
     // Tool state tracking
     private var currentToolType: String = "pen"
@@ -68,24 +81,43 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
     init {
         // Try to load native library - don't crash if it fails
         nativeLibraryAvailable = ensureLibraryLoaded()
-
-        setEGLContextClientVersion(2)
-        setEGLConfigChooser(8, 8, 8, 8, 16, 0)
-        holder.setFormat(PixelFormat.RGBA_8888)
-
-        renderer = DrawingRenderer(this)
-        setRenderer(renderer)
-        renderMode = RENDERMODE_WHEN_DIRTY
+        isOpaque = false
+        surfaceTextureListener = this
     }
 
-    // DrawingEngineHost interface implementation
-    override fun getDrawingEngine(): Long = drawingEngine
+    override fun onSurfaceTextureAvailable(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
+        queueEvent {
+            createRenderSurface(surfaceTexture, width, height)
+        }
+    }
 
-    override fun onSurfaceSizeChanged(width: Int, height: Int) {
+    override fun onSurfaceTextureSizeChanged(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
+        queueEvent {
+            makeRenderContextCurrent()
+            configureSurfaceSize(width, height)
+            renderFrame()
+        }
+    }
+
+    override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean {
+        runOnGlThreadSync(2000) {
+            destroyRenderSurface()
+            true
+        }
+        return true
+    }
+
+    override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) = Unit
+
+    private fun configureSurfaceSize(width: Int, height: Int) {
         viewWidth = width
         viewHeight = height
 
         if (width <= 0 || height <= 0) {
+            return
+        }
+        if (!nativeLibraryAvailable) {
+            android.util.Log.e("MobileInkCanvasView", "Cannot configure drawing engine because native library is unavailable")
             return
         }
 
@@ -98,6 +130,142 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
         if (!currentPdfBackgroundUri.isNullOrEmpty()) {
             setPdfBackgroundUri(currentPdfBackgroundUri)
         }
+    }
+
+    private fun createRenderSurface(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
+        destroyRenderSurface()
+
+        renderSurface = Surface(surfaceTexture)
+        eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
+        if (eglDisplay == EGL14.EGL_NO_DISPLAY) {
+            android.util.Log.e("MobileInkCanvasView", "Unable to get EGL display")
+            return
+        }
+
+        val version = IntArray(2)
+        if (!EGL14.eglInitialize(eglDisplay, version, 0, version, 1)) {
+            android.util.Log.e("MobileInkCanvasView", "Unable to initialize EGL")
+            destroyRenderSurface()
+            return
+        }
+
+        val configAttributes = intArrayOf(
+            EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
+            EGL14.EGL_SURFACE_TYPE, EGL14.EGL_WINDOW_BIT,
+            EGL14.EGL_RED_SIZE, 8,
+            EGL14.EGL_GREEN_SIZE, 8,
+            EGL14.EGL_BLUE_SIZE, 8,
+            EGL14.EGL_ALPHA_SIZE, 8,
+            EGL14.EGL_DEPTH_SIZE, 0,
+            EGL14.EGL_STENCIL_SIZE, 0,
+            EGL14.EGL_NONE,
+        )
+        val configs = arrayOfNulls<EGLConfig>(1)
+        val configCount = IntArray(1)
+        if (!EGL14.eglChooseConfig(
+                eglDisplay,
+                configAttributes,
+                0,
+                configs,
+                0,
+                configs.size,
+                configCount,
+                0,
+            ) || configCount[0] == 0 || configs[0] == null
+        ) {
+            android.util.Log.e("MobileInkCanvasView", "Unable to choose EGL config")
+            destroyRenderSurface()
+            return
+        }
+
+        val resolvedConfig = configs[0]
+        if (resolvedConfig == null) {
+            android.util.Log.e("MobileInkCanvasView", "EGL config was unexpectedly null")
+            destroyRenderSurface()
+            return
+        }
+
+        eglContext = EGL14.eglCreateContext(
+            eglDisplay,
+            resolvedConfig,
+            EGL14.EGL_NO_CONTEXT,
+            intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE),
+            0,
+        )
+        if (eglContext == EGL14.EGL_NO_CONTEXT) {
+            android.util.Log.e("MobileInkCanvasView", "Unable to create EGL context")
+            destroyRenderSurface()
+            return
+        }
+
+        eglSurface = EGL14.eglCreateWindowSurface(
+            eglDisplay,
+            resolvedConfig,
+            renderSurface,
+            intArrayOf(EGL14.EGL_NONE),
+            0,
+        )
+        if (eglSurface == EGL14.EGL_NO_SURFACE) {
+            android.util.Log.e("MobileInkCanvasView", "Unable to create EGL window surface")
+            destroyRenderSurface()
+            return
+        }
+
+        if (!makeRenderContextCurrent()) {
+            destroyRenderSurface()
+            return
+        }
+
+        surfaceReady = true
+        configureSurfaceSize(width, height)
+        renderFrame()
+    }
+
+    private fun makeRenderContextCurrent(): Boolean {
+        if (
+            eglDisplay == EGL14.EGL_NO_DISPLAY ||
+            eglContext == EGL14.EGL_NO_CONTEXT ||
+            eglSurface == EGL14.EGL_NO_SURFACE
+        ) {
+            return false
+        }
+
+        val success = EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
+        if (!success) {
+            android.util.Log.e("MobileInkCanvasView", "Unable to make EGL context current")
+        }
+        return success
+    }
+
+    private fun destroyRenderSurface() {
+        surfaceReady = false
+
+        if (drawingEngine != 0L && eglDisplay != EGL14.EGL_NO_DISPLAY) {
+            makeRenderContextCurrent()
+            releaseGaneshContext(drawingEngine)
+        }
+
+        if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
+            EGL14.eglMakeCurrent(
+                eglDisplay,
+                EGL14.EGL_NO_SURFACE,
+                EGL14.EGL_NO_SURFACE,
+                EGL14.EGL_NO_CONTEXT,
+            )
+            if (eglSurface != EGL14.EGL_NO_SURFACE) {
+                EGL14.eglDestroySurface(eglDisplay, eglSurface)
+            }
+            if (eglContext != EGL14.EGL_NO_CONTEXT) {
+                EGL14.eglDestroyContext(eglDisplay, eglContext)
+            }
+            EGL14.eglTerminate(eglDisplay)
+        }
+
+        eglSurface = EGL14.EGL_NO_SURFACE
+        eglContext = EGL14.EGL_NO_CONTEXT
+        eglDisplay = EGL14.EGL_NO_DISPLAY
+        renderSurface?.release()
+        renderSurface = null
     }
 
     private fun configureDrawingEngine(width: Int, height: Int, preserveExistingDrawing: Boolean) {
@@ -113,6 +281,7 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
         }
 
         if (drawingEngine != 0L) {
+            releaseGaneshContext(drawingEngine)
             destroyDrawingEngine(drawingEngine)
             drawingEngine = 0
         }
@@ -136,8 +305,26 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
         post { emitSelectionChange() }
     }
 
-    override fun renderEngineToPixels(engine: Long, bitmap: Bitmap) {
-        renderToPixels(engine, bitmap)
+    private fun renderFrame() {
+        val engine = drawingEngine
+        if (!surfaceReady || engine == 0L || viewWidth <= 0 || viewHeight <= 0) {
+            return
+        }
+        if (!makeRenderContextCurrent()) {
+            return
+        }
+        if (renderGaneshToCurrentSurface(engine, viewWidth, viewHeight)) {
+            EGL14.eglSwapBuffers(eglDisplay, eglSurface)
+        }
+    }
+
+    private fun queueEvent(block: () -> Unit) {
+        if (Looper.myLooper() == renderHandler.looper) {
+            block()
+            return
+        }
+
+        renderHandler.post(block)
     }
 
     /**
@@ -227,18 +414,27 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
             registeredTag = -1
         }
 
-        queueEvent {
+        runOnGlThreadSync(2000) {
             if (drawingEngine != 0L) {
+                if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
+                    makeRenderContextCurrent()
+                    releaseGaneshContext(drawingEngine)
+                }
                 destroyDrawingEngine(drawingEngine)
                 drawingEngine = 0
             }
+            destroyRenderSurface()
+            true
         }
+        renderThread.quitSafely()
         super.onDetachedFromWindow()
     }
 
     private fun requestInkRender(force: Boolean = false) {
         if (!renderSuspended || force) {
-            super.requestRender()
+            queueEvent {
+                renderFrame()
+            }
         }
     }
 
@@ -781,7 +977,7 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
     }
 
     fun setDrawingBackgroundColor(color: Int) {
-        renderer.backgroundColor = color
+        setBackgroundColor(color)
         requestInkRender()
     }
 
@@ -881,17 +1077,32 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
 
     // Helper for synchronous GL thread operations with timeout
     private fun <T> runOnGlThreadSync(timeoutMs: Long = 2000, block: () -> T?): T? {
+        if (Looper.myLooper() == renderHandler.looper) {
+            return block()
+        }
+
         val latch = java.util.concurrent.CountDownLatch(1)
         var result: T? = null
+        var failure: Throwable? = null
         queueEvent {
-            result = block()
-            latch.countDown()
+            try {
+                result = block()
+            } catch (throwable: Throwable) {
+                failure = throwable
+            } finally {
+                latch.countDown()
+            }
         }
         try {
-            latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            val completed = latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            if (!completed) {
+                android.util.Log.e("MobileInkCanvasView", "GL thread operation timed out after ${timeoutMs}ms")
+            }
         } catch (e: InterruptedException) {
             android.util.Log.e("MobileInkCanvasView", "GL thread operation interrupted", e)
+            Thread.currentThread().interrupt()
         }
+        failure?.let { throw it }
         return result
     }
 
@@ -980,7 +1191,6 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
     // Native method declarations
     private external fun createDrawingEngine(width: Int, height: Int): Long
     private external fun destroyDrawingEngine(engine: Long)
-    private external fun resizeEngine(engine: Long, width: Int, height: Int)
 
     // Touch handling with full stylus support
     private external fun touchBegan(engine: Long, x: Float, y: Float, pressure: Float, azimuth: Float, altitude: Float, timestamp: Long, isStylusInput: Boolean)
@@ -1028,9 +1238,9 @@ class MobileInkCanvasView(context: Context) : GLSurfaceView(context), DrawingEng
     private external fun deserializeDrawing(engine: Long, data: ByteArray)
 
     // Rendering
-    private external fun renderToPixels(engine: Long, bitmap: Bitmap)
+    private external fun renderGaneshToCurrentSurface(engine: Long, width: Int, height: Int): Boolean
+    private external fun releaseGaneshContext(engine: Long)
     private external fun renderToPixelsScaled(engine: Long, bitmap: Bitmap, scale: Float)
-    private external fun renderToByteArray(engine: Long, pixels: ByteArray, width: Int, height: Int)
 
     companion object {
         private var libraryLoaded = false

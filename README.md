@@ -37,12 +37,12 @@ mobile-ink is currently used in production in MathNotes: https://apps.apple.com/
 | Area | Current support |
 | --- | --- |
 | iOS Apple Pencil drawing | Used in production |
-| Native rendering | Custom `MTKView` backed by C++ Skia/Metal |
+| Native rendering | Custom iOS `MTKView` and Android `TextureView` backed by the shared C++ Skia engine |
 | Continuous notebooks | Fixed native engine pool with momentum scroll and pinch zoom |
 | Tools | Pen, highlighter, crayon, calligraphy, eraser, selection, and shape recognition |
 | Serialization | JSON notebook payloads plus native page load/save/export helpers |
 | Example app | Expo dev-client app with blank continuous notebook, tools, selection, save/reload, and zoom |
-| Android | Not supported yet |
+| Android | V1 native drawing support with GPU-backed Ganesh rendering, pooled pages, previews, save/reload, eraser, selection, and PDF backgrounds |
 | Expo Go | Not supported because this package includes native code |
 
 ## Demos
@@ -68,7 +68,7 @@ npm install @mathnotes/mobile-ink \
 cd ios && pod install
 ```
 
-For Expo apps, use a dev client or prebuild. Expo Go cannot load this native module.
+For Expo apps, use a dev client or prebuild. Expo Go cannot load this native module. Android builds also need a configured Android SDK, NDK, and CMake toolchain.
 
 Your app Babel config must include the Reanimated/Worklets plugin expected by your React Native/Reanimated version. For Expo SDK 54/Reanimated 4:
 
@@ -169,14 +169,14 @@ The Android example runs the drawing canvas path. The benchmark screen and CPU/G
 
 ## Roadmap
 
-Near-term work is focused on making the public package easier to adopt and easier to contribute to, and achieving Android parity:
+Near-term work is focused on making the public package easier to adopt and easier to contribute to, and hardening Android v1:
 
 - Improve install and troubleshooting docs for React Native and Expo dev-client apps.
 - Add more integration recipes for save/load, tool switching, and app-owned storage.
 - Tighten selection transform performance for large stroke groups.
 - Improve edge-case zoom behavior near page and canvas boundaries.
 - Continue hardening the example app as a small regression harness.
-- Complete Android parity with iOS. We started this but it is still not quite there.
+- Add the Android native benchmark runner and expose Android benchmark controls in the example app.
 
 ## Development
 

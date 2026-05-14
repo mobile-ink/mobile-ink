@@ -152,14 +152,14 @@ npx expo run:ios
 
 ## Roadmap
 
-Near-term work is focused on making the public package easier to adopt and easier to contribute to:
+Near-term work is focused on making the public package easier to adopt and easier to contribute to, and achieving Android parity:
 
 - Improve install and troubleshooting docs for React Native and Expo dev-client apps.
 - Add more integration recipes for save/load, tool switching, and app-owned storage.
 - Tighten selection transform performance for large stroke groups.
 - Improve edge-case zoom behavior near page and canvas boundaries.
 - Continue hardening the example app as a small regression harness.
-- Explore Android after the iOS API surface has settled.
+- Complete Android parity with iOS. We started this but it is still not quite there.
 
 ## Development
 

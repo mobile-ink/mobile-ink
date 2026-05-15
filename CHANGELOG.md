@@ -2,6 +2,13 @@
 
 All notable changes to `@mathnotes/mobile-ink` will be documented here.
 
+## [0.3.0] - 2026-05-15
+
+- Added the Android native ink renderer with Skia Ganesh GPU rendering and React Native view integration.
+- Brought continuous multi-page notebooks to Android, including pooled native canvas activation, page preview overlays while engines mount, and saved notebook reload in the example app.
+- Added Android PDF background loading, notebook serialization support, and native smoke coverage.
+- Documented Android setup and parity status for the example app and package consumers.
+
 ## [0.2.0] - 2026-05-12
 
 - Defaulted the iOS renderer to the Ganesh/Metal path while keeping CPU selectable for A/B comparison and fallback.
